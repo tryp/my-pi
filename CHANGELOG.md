@@ -1,5 +1,12 @@
 # @spences10/pi-context
 
+## 0.0.6
+
+### Patch Changes
+
+- 92b9ff0: Add configurable context sidecar retention, storage caps, capture
+  thresholds, and nested settings menus.
+
 ## 0.0.5
 
 ### Patch Changes
