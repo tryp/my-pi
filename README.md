@@ -39,9 +39,11 @@ pi -e ./packages/pi-context
 - `context_purge` / `/context purge [days]` — delete old indexed
   output. Also supports source/project/session filters and
   `/context purge expired`.
+- `/context settings` — choose retention/size presets or inspect the
+  effective saved/env-backed policy.
 
 Use `/context` in interactive mode for a small modal with list, stats,
-and purge actions.
+settings, and purge actions.
 
 Receipts suggest the main retrieval path:
 
@@ -89,7 +91,21 @@ back to the current project path. Retrieval tools use that scope by
 default to avoid leaking other projects or sessions into results; pass
 `global: true` when you intend to search or list everything.
 
-Retention is env-backed:
+Retention, storage cap, and capture thresholds are saved at
+`~/.config/my-pi/context.json` via `/context settings`. Presets
+include `default`, `light`, `balanced`, `research`, and `archive`;
+custom values are available with:
+
+```text
+/context settings custom <days|off> <max-mb|off> [capture-kb] [capture-lines] [purge-on-shutdown]
+```
+
+Capture thresholds control when large tool output is moved into the
+sidecar instead of staying inline in the model context. Defaults match
+historical behavior: generic tools capture after `24 KiB` or `300`
+lines; MCP output captures after `50 KiB` or `2000` lines.
+
+Environment variables override saved settings:
 
 - `MY_PI_CONTEXT_RETENTION_DAYS` — default `7`; set `0`, `off`, or
   `disabled` to disable age cleanup.
@@ -97,6 +113,11 @@ Retention is env-backed:
   cleanup on shutdown.
 - `MY_PI_CONTEXT_MAX_MB` — optional max stored raw bytes; oldest
   sources are removed first when exceeded.
+- `MY_PI_CONTEXT_CAPTURE_MAX_KB` / `MY_PI_CONTEXT_CAPTURE_MAX_LINES` —
+  generic tool-output capture threshold.
+- `MY_PI_CONTEXT_MCP_MAX_KB` / `MY_PI_CONTEXT_MCP_MAX_LINES` — MCP
+  output capture threshold.
+- `MY_PI_CONTEXT_CONFIG` — override the saved settings file path.
 
 ## Safety model
 
