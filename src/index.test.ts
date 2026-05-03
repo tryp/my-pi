@@ -3,10 +3,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import context_sidecar, {
 	get_context_store,
 	is_context_sidecar_enabled,
+	load_context_settings_config,
 	set_context_sidecar_enabled,
 } from './index.js';
 
@@ -54,11 +55,18 @@ const original_retention_days =
 const original_purge_on_shutdown =
 	process.env.MY_PI_CONTEXT_PURGE_ON_SHUTDOWN;
 const original_max_mb = process.env.MY_PI_CONTEXT_MAX_MB;
+const original_context_config = process.env.MY_PI_CONTEXT_CONFIG;
 
 function temp_db(): string {
 	const dir = mkdtempSync(join(tmpdir(), 'pi-context-ext-'));
 	dirs.push(dir);
 	return join(dir, 'context.db');
+}
+
+function temp_config(): string {
+	const dir = mkdtempSync(join(tmpdir(), 'pi-context-settings-'));
+	dirs.push(dir);
+	return join(dir, 'context.json');
 }
 
 function create_fake_pi(): {
@@ -110,6 +118,10 @@ function fake_context(
 	};
 }
 
+beforeEach(() => {
+	process.env.MY_PI_CONTEXT_CONFIG = temp_config();
+});
+
 afterEach(() => {
 	set_context_sidecar_enabled(false);
 	if (original_context_db === undefined)
@@ -128,6 +140,9 @@ afterEach(() => {
 	if (original_max_mb === undefined)
 		delete process.env.MY_PI_CONTEXT_MAX_MB;
 	else process.env.MY_PI_CONTEXT_MAX_MB = original_max_mb;
+	if (original_context_config === undefined)
+		delete process.env.MY_PI_CONTEXT_CONFIG;
+	else process.env.MY_PI_CONTEXT_CONFIG = original_context_config;
 	for (const dir of dirs)
 		rmSync(dir, { recursive: true, force: true });
 	dirs = [];
@@ -214,6 +229,39 @@ describe('context_sidecar extension', () => {
 				global: true,
 			}),
 		).toHaveLength(fresh!.chunk_count);
+	});
+
+	it('saves context settings from the /context command', async () => {
+		process.env.MY_PI_CONTEXT_DB = temp_db();
+		process.env.MY_PI_CONTEXT_CONFIG = join(
+			mkdtempSync(join(tmpdir(), 'pi-context-settings-')),
+			'context.json',
+		);
+		dirs.push(
+			process.env.MY_PI_CONTEXT_CONFIG.replace(
+				/\/context\.json$/,
+				'',
+			),
+		);
+		const fake = create_fake_pi();
+		const notifications: string[] = [];
+		context_sidecar(fake.pi);
+
+		await fake.commands.get('context')!.handler(
+			'settings light' as any,
+			{
+				ui: {
+					notify: (message: string) => notifications.push(message),
+				},
+			} as any,
+		);
+
+		expect(load_context_settings_config()).toMatchObject({
+			preset: 'light',
+			retention_days: 1,
+			max_mb: 50,
+		});
+		expect(notifications[0]).toContain('Context settings saved');
 	});
 
 	it('stores and searches with session/project scope from extension context', async () => {

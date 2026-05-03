@@ -4,11 +4,10 @@ import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { get_context_capture_limits } from './config.js';
 import { parse_context_retention_policy } from './policy.js';
 import { apply_schema } from './schema.js';
 import {
-	DEFAULT_CONTEXT_MAX_BYTES,
-	DEFAULT_CONTEXT_MAX_LINES,
 	chunk_text,
 	count_lines,
 	escape_fts5_query,
@@ -126,8 +125,9 @@ export class ContextStore {
 		this.db_path = options.db_path ?? default_context_db_path();
 		this.project_path = options.project_path ?? process.cwd();
 		this.session_id = options.session_id ?? null;
-		this.max_bytes = options.max_bytes ?? DEFAULT_CONTEXT_MAX_BYTES;
-		this.max_lines = options.max_lines ?? DEFAULT_CONTEXT_MAX_LINES;
+		const capture_limits = get_context_capture_limits();
+		this.max_bytes = options.max_bytes ?? capture_limits.max_bytes;
+		this.max_lines = options.max_lines ?? capture_limits.max_lines;
 
 		const dir = dirname(this.db_path);
 		if (!existsSync(dir))
@@ -143,10 +143,9 @@ export class ContextStore {
 			this.project_path = options.project_path;
 		if (options.session_id !== undefined)
 			this.session_id = options.session_id;
-		if (options.max_bytes !== undefined)
-			this.max_bytes = options.max_bytes;
-		if (options.max_lines !== undefined)
-			this.max_lines = options.max_lines;
+		const capture_limits = get_context_capture_limits();
+		this.max_bytes = options.max_bytes ?? capture_limits.max_bytes;
+		this.max_lines = options.max_lines ?? capture_limits.max_lines;
 	}
 
 	private scoped_filter(
