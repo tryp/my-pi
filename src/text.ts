@@ -205,6 +205,9 @@ export function summarize_source(
 		``,
 		`Source: ${result.source_id}`,
 		`Size: ${format_bytes(result.bytes)}, ${result.lines} lines, ${result.chunk_count} chunks`,
+		result.first_chunk_id
+			? `First chunk id: ${result.first_chunk_id}`
+			: undefined,
 		`Project: ${result.project_path ?? '(none)'}`,
 		`Session: ${result.session_id ?? '(none)'}`,
 		``,
@@ -215,5 +218,7 @@ export function summarize_source(
 		``,
 		`Preview:`,
 		result.preview,
-	].join('\n');
+	]
+		.filter((line): line is string => line !== undefined)
+		.join('\n');
 }

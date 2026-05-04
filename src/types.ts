@@ -44,6 +44,7 @@ export interface StoredContextOutput {
 	preview: string;
 	receipt: string;
 	chunk_count: number;
+	first_chunk_id: string | null;
 	returned_bytes: number;
 	project_path: string | null;
 	session_id: string | null;
@@ -75,6 +76,15 @@ export interface ContextListResult {
 	chunk_count: number;
 	first_chunk_title: string | null;
 	preview: string | null;
+}
+
+export interface ContextChunkSummary {
+	source_id: string;
+	chunk_count: number;
+	first_chunk_id: string | null;
+	last_chunk_id: string | null;
+	first_ordinal: number | null;
+	last_ordinal: number | null;
 }
 
 export interface ContextScopeOptions {
@@ -140,6 +150,15 @@ export interface ListRow {
 	chunk_count: number;
 	first_chunk_title: string | null;
 	preview: string | null;
+}
+
+export interface ChunkSummaryRow {
+	source_id: string;
+	chunk_count: number;
+	first_chunk_id: string | null;
+	last_chunk_id: string | null;
+	first_ordinal: number | null;
+	last_ordinal: number | null;
 }
 
 export interface ContextChunk {

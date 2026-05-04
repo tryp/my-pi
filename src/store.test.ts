@@ -112,6 +112,10 @@ describe('ContextStore', () => {
 		expect(stored?.receipt).toContain(
 			`context_get source_id:"${stored!.source_id}"`,
 		);
+		expect(stored?.receipt).toContain(
+			`First chunk id: ${stored!.source_id}_0001`,
+		);
+		expect(stored?.first_chunk_id).toBe(`${stored!.source_id}_0001`);
 		expect(stored?.receipt).toContain('context_list');
 		expect(stored?.receipt).toContain('Preview:');
 		expect(stored?.chunk_count).toBeGreaterThan(1);
@@ -131,6 +135,24 @@ describe('ContextStore', () => {
 			'needle-at-end',
 		);
 		expect(chunks).toHaveLength(stored!.chunk_count);
+		expect(store.get(stored!.source_id, '1')[0]!.id).toBe(
+			chunks[0]!.id,
+		);
+		expect(store.get(stored!.source_id, '0001')[0]!.id).toBe(
+			chunks[0]!.id,
+		);
+		expect(
+			store.get(
+				stored!.source_id,
+				`${stored!.source_id}:chunk:000`,
+			)[0]!.id,
+		).toBe(chunks[0]!.id);
+		expect(
+			store.get(
+				stored!.source_id,
+				`${stored!.source_id}:chunk:001`,
+			)[0]!.id,
+		).toBe(chunks[0]!.id);
 
 		const exact = store.get(stored!.source_id, results[0].chunk_id);
 		expect(exact).toHaveLength(1);
