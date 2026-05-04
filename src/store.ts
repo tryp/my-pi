@@ -16,7 +16,9 @@ import {
 	summarize_source,
 } from './text.js';
 import type {
+	ChunkSummaryRow,
 	ContextChunk,
+	ContextChunkSummary,
 	ContextCleanupResult,
 	ContextListResult,
 	ContextPurgeDetails,
@@ -46,6 +48,7 @@ export {
 } from './text.js';
 export type {
 	ContextChunk,
+	ContextChunkSummary,
 	ContextCleanupResult,
 	ContextListResult,
 	ContextPurgeDetails,
@@ -61,6 +64,10 @@ export type {
 let global_options: ContextStoreOptions = {};
 let global_enabled = false;
 let global_store: ContextStore | null = null;
+
+function escape_regexp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export function default_context_db_path(): string {
 	if (process.env.MY_PI_CONTEXT_DB)
@@ -184,7 +191,11 @@ export class ContextStore {
 	private find_duplicate_source(
 		content_hash: string,
 		scope: ContextScopeOptions,
-	): { id: string; chunk_count: number } | null {
+	): {
+		id: string;
+		chunk_count: number;
+		first_chunk_id: string | null;
+	} | null {
 		const scoped = this.scoped_filter('context_sources', scope);
 		const filters = [
 			'context_sources.content_hash = ?',
@@ -196,7 +207,14 @@ export class ContextStore {
 		];
 		const row = this.db
 			.prepare(`
-				SELECT context_sources.id, COUNT(context_chunks.id) as chunk_count
+				SELECT
+					context_sources.id,
+					COUNT(context_chunks.id) as chunk_count,
+					(
+						SELECT first_chunk.id FROM context_chunks first_chunk
+						WHERE first_chunk.source_id = context_sources.id
+						ORDER BY first_chunk.ordinal LIMIT 1
+					) as first_chunk_id
 				FROM context_sources
 				LEFT JOIN context_chunks ON context_chunks.source_id = context_sources.id
 				WHERE ${filters.join(' AND ')}
@@ -205,7 +223,11 @@ export class ContextStore {
 				LIMIT 1
 			`)
 			.get(...params) as
-			| { id: string; chunk_count: number }
+			| {
+					id: string;
+					chunk_count: number;
+					first_chunk_id: string | null;
+			  }
 			| undefined;
 		return row ?? null;
 	}
@@ -243,6 +265,7 @@ export class ContextStore {
 				preview,
 				receipt: '',
 				chunk_count: duplicate.chunk_count,
+				first_chunk_id: duplicate.first_chunk_id,
 				returned_bytes: 0,
 				project_path,
 				session_id,
@@ -306,6 +329,7 @@ export class ContextStore {
 				preview,
 				receipt: '',
 				chunk_count: chunks.length,
+				first_chunk_id: chunks[0]?.id ?? null,
 				returned_bytes: 0,
 				project_path,
 				session_id,
@@ -465,6 +489,60 @@ export class ContextStore {
 		);
 	}
 
+	private chunk_reference_to_ordinal(
+		source_id: string,
+		chunk_id: string,
+	): number | null {
+		const trimmed = chunk_id.trim();
+		const legacy_match = new RegExp(
+			`^${escape_regexp(source_id)}:chunk:(\\d+)$`,
+		).exec(trimmed);
+		if (legacy_match) {
+			const value = Number.parseInt(legacy_match[1]!, 10);
+			if (!Number.isSafeInteger(value)) return null;
+			return value <= 0 ? 1 : value;
+		}
+		if (!/^\d+$/.test(trimmed)) return null;
+		const value = Number.parseInt(trimmed, 10);
+		return Number.isSafeInteger(value) && value > 0 ? value : null;
+	}
+
+	chunk_summary(
+		source_id: string,
+		options: ContextScopeOptions = {},
+	): ContextChunkSummary | null {
+		const scoped = this.scoped_filter('context_sources', options);
+		const filters = ['context_sources.id = ?', ...scoped.where];
+		const params: Array<string | number> = [
+			source_id,
+			...scoped.params,
+		];
+		const row = this.db
+			.prepare(`
+				SELECT
+					context_sources.id as source_id,
+					COUNT(context_chunks.id) as chunk_count,
+					(
+						SELECT first_chunk.id FROM context_chunks first_chunk
+						WHERE first_chunk.source_id = context_sources.id
+						ORDER BY first_chunk.ordinal LIMIT 1
+					) as first_chunk_id,
+					(
+						SELECT last_chunk.id FROM context_chunks last_chunk
+						WHERE last_chunk.source_id = context_sources.id
+						ORDER BY last_chunk.ordinal DESC LIMIT 1
+					) as last_chunk_id,
+					MIN(context_chunks.ordinal) as first_ordinal,
+					MAX(context_chunks.ordinal) as last_ordinal
+				FROM context_sources
+				LEFT JOIN context_chunks ON context_chunks.source_id = context_sources.id
+				WHERE ${filters.join(' AND ')}
+				GROUP BY context_sources.id
+			`)
+			.get(...params) as ChunkSummaryRow | undefined;
+		return row ?? null;
+	}
+
 	get(
 		source_id: string,
 		chunk_id?: string,
@@ -477,8 +555,17 @@ export class ContextStore {
 			...scoped.params,
 		];
 		if (chunk_id) {
-			filters.push('context_chunks.id = ?');
-			params.push(chunk_id);
+			const ordinal = this.chunk_reference_to_ordinal(
+				source_id,
+				chunk_id,
+			);
+			if (ordinal) {
+				filters.push('context_chunks.ordinal = ?');
+				params.push(ordinal);
+			} else {
+				filters.push('context_chunks.id = ?');
+				params.push(chunk_id);
+			}
 		}
 		const stmt = this.db.prepare(`
 			SELECT

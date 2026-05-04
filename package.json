@@ -43,7 +43,7 @@
 		"test:self": "vitest run"
 	},
 	"dependencies": {
-		"@mariozechner/pi-coding-agent": "^0.72.1",
+		"@mariozechner/pi-coding-agent": "^0.73.0",
 		"@spences10/pi-redact": "workspace:*",
 		"@spences10/pi-tui-modal": "workspace:*",
 		"typebox": "^1.1.37"

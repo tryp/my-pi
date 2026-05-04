@@ -4,8 +4,8 @@
 
 ### Patch Changes
 
-- 92b9ff0: Add configurable context sidecar retention, storage caps, capture
-  thresholds, and nested settings menus.
+- 92b9ff0: Add configurable context sidecar retention, storage caps,
+  capture thresholds, and nested settings menus.
 
 ## 0.0.5
 

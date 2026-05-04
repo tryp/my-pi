@@ -878,12 +878,17 @@ export default function context_sidecar(pi: ExtensionAPI): void {
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const scope = scope_from_context(ctx);
-			const chunks = get_context_store(scope).get(
+			const store = get_context_store(scope);
+			const scope_options = {
+				...(params.global ? {} : scope),
+				global: params.global,
+			};
+			const chunks = store.get(
 				params.source_id,
 				params.chunk_id,
-				{ ...(params.global ? {} : scope), global: params.global },
+				scope_options,
 			);
-			const text = chunks.length
+			let text = chunks.length
 				? chunks
 						.map((chunk) =>
 							[
@@ -895,6 +900,26 @@ export default function context_sidecar(pi: ExtensionAPI): void {
 						)
 						.join('\n\n---\n\n')
 				: 'No chunks found.';
+			const summary =
+				chunks.length === 0 && params.chunk_id
+					? store.chunk_summary(params.source_id, scope_options)
+					: null;
+			if (summary && summary.chunk_count > 0) {
+				const range =
+					summary.first_chunk_id === summary.last_chunk_id
+						? summary.first_chunk_id
+						: `${summary.first_chunk_id} … ${summary.last_chunk_id}`;
+				text = [
+					`No chunk found for chunk_id "${params.chunk_id}".`,
+					`Source ${params.source_id} has ${summary.chunk_count} chunk(s): ${range}.`,
+					`Valid ordinals: ${summary.first_ordinal} … ${summary.last_ordinal}.`,
+					summary.first_chunk_id
+						? `Try chunk_id:"${summary.first_chunk_id}" or chunk_id:"1".`
+						: undefined,
+				]
+					.filter((line): line is string => line !== undefined)
+					.join('\n');
+			}
 			return {
 				content: [{ type: 'text' as const, text }],
 				details: { count: chunks.length },

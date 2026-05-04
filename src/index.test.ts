@@ -464,6 +464,29 @@ describe('context_sidecar extension', () => {
 		expect(get.content[0].text).toContain('tool-token');
 		expect(get.details).toMatchObject({ count: 1 });
 
+		const alias_get = await fake.tools
+			.get('context_get')!
+			.execute('call-2a', {
+				source_id,
+				chunk_id: '0001',
+			});
+		expect(alias_get.content[0].text).toContain('tool-token');
+		expect(alias_get.details).toMatchObject({ count: 1 });
+
+		const missing_chunk = await fake.tools
+			.get('context_get')!
+			.execute('call-2b', {
+				source_id,
+				chunk_id: 'missing',
+			});
+		expect(missing_chunk.content[0].text).toContain(
+			'No chunk found for chunk_id "missing".',
+		);
+		expect(missing_chunk.content[0].text).toContain(
+			'Valid ordinals: 1',
+		);
+		expect(missing_chunk.content[0].text).toContain('Try chunk_id:');
+
 		const stats = await fake.tools
 			.get('context_stats')!
 			.execute('call-3', {});

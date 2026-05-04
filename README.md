@@ -45,13 +45,18 @@ pi -e ./packages/pi-context
 Use `/context` in interactive mode for a small modal with list, stats,
 settings, and purge actions.
 
-Receipts suggest the main retrieval path:
+Receipts include the source id, first exact chunk id, and the main
+retrieval path:
 
 ```text
+First chunk id: ctx_..._0001
 context_search query:"..." source_id:"ctx_..."
 context_get source_id:"ctx_..."
 context_list
 ```
+
+`context_get` accepts exact chunk ids plus ordinal aliases such as `1`
+or `0001`, and legacy guessed references such as `ctx_...:chunk:000`.
 
 ## Coverage policy
 
