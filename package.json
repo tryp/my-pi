@@ -46,7 +46,7 @@
 		"@mariozechner/pi-coding-agent": "^0.73.0",
 		"@spences10/pi-redact": "workspace:*",
 		"@spences10/pi-tui-modal": "workspace:*",
-		"typebox": "^1.1.37"
+		"typebox": "^1.1.38"
 	},
 	"devDependencies": {
 		"@types/node": "^25.6.0",
