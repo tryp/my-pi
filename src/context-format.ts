@@ -1,0 +1,159 @@
+import {
+	CONTEXT_SETTINGS_PRESETS,
+	get_context_capture_limits,
+	get_context_mcp_output_limits,
+	get_context_settings_config_path,
+	load_context_settings_config,
+} from './config.js';
+import {
+	is_context_sidecar_enabled,
+	type ContextListResult,
+	type ContextPurgeDetails,
+	type ContextSearchResult,
+	type ContextStats,
+} from './store.js';
+
+export function format_search_results(
+	results: ContextSearchResult[],
+): string {
+	if (results.length === 0) return 'No indexed context matched.';
+	return results
+		.map((result, index) =>
+			[
+				`## ${index + 1}. ${result.title ?? result.chunk_id}`,
+				`Source: ${result.source_id} • Chunk: ${result.chunk_id} • Tool: ${result.tool_name}`,
+				'',
+				result.content,
+			].join('\n'),
+		)
+		.join('\n\n---\n\n');
+}
+
+export function format_list_results(
+	results: ContextListResult[],
+): string {
+	if (results.length === 0)
+		return 'No indexed context sources found.';
+	return results
+		.map((result) =>
+			[
+				`## ${result.source_id}`,
+				`Created: ${new Date(result.created_at).toISOString()} • Tool: ${result.tool_name}`,
+				`Size: ${result.bytes} bytes, ${result.lines} lines, ${result.chunk_count} chunks`,
+				`Project: ${result.project_path ?? '(none)'}`,
+				`Session: ${result.session_id ?? '(none)'}`,
+				result.input_summary
+					? `Input: ${result.input_summary}`
+					: undefined,
+				result.first_chunk_title
+					? `First chunk: ${result.first_chunk_title}`
+					: undefined,
+				result.preview ? `Preview: ${result.preview}` : undefined,
+			]
+				.filter(Boolean)
+				.join('\n'),
+		)
+		.join('\n\n');
+}
+
+export function format_purge_details(
+	details: ContextPurgeDetails,
+): string {
+	const filters = [
+		details.source_id ? `source_id=${details.source_id}` : undefined,
+		details.project_path !== undefined
+			? `project_path=${details.project_path ?? '(none)'}`
+			: undefined,
+		details.session_id !== undefined
+			? `session_id=${details.session_id ?? '(none)'}`
+			: undefined,
+		details.older_than_days !== undefined
+			? `older_than_days=${details.older_than_days}`
+			: undefined,
+	]
+		.filter(Boolean)
+		.join(', ');
+	return `Deleted ${details.deleted} context source(s).${filters ? ` Filters: ${filters}.` : ''}`;
+}
+
+export function format_stats(stats: ContextStats): string {
+	const scoped = stats.scope_project_path || stats.scope_session_id;
+	return [
+		'## context-sidecar stats',
+		'',
+		`- Enabled: ${is_context_sidecar_enabled()}`,
+		scoped
+			? `- Scope: project=${stats.scope_project_path ?? '(none)'}, session=${stats.scope_session_id ?? '(none)'}`
+			: '- Scope: global',
+		`- Scoped sources: ${stats.sources}`,
+		`- Scoped chunks: ${stats.chunks}`,
+		`- Scoped raw bytes stored: ${stats.bytes_stored}`,
+		`- Global sources: ${stats.global_sources}`,
+		`- Global chunks: ${stats.global_chunks}`,
+		`- Global raw bytes stored: ${stats.global_bytes_stored}`,
+		`- Bytes returned: ${stats.bytes_returned}`,
+		`- Bytes saved: ${stats.bytes_saved}`,
+		`- Reduction: ${stats.reduction_pct}%`,
+		`- DB bytes: ${stats.total_bytes}`,
+		`- Scoped oldest source: ${format_timestamp(stats.oldest_created_at)}`,
+		`- Scoped newest source: ${format_timestamp(stats.newest_created_at)}`,
+		`- Global oldest source: ${format_timestamp(stats.global_oldest_created_at)}`,
+		`- Global newest source: ${format_timestamp(stats.global_newest_created_at)}`,
+		`- Retention days: ${stats.retention_days ?? 'disabled'}`,
+		`- Purge on shutdown: ${stats.purge_on_shutdown}`,
+		`- Max DB size: ${stats.max_mb === null ? 'disabled' : `${stats.max_mb} MiB`}`,
+	].join('\n');
+}
+
+export function format_timestamp(timestamp: number | null): string {
+	return timestamp === null
+		? '(none)'
+		: new Date(timestamp).toISOString();
+}
+
+export function format_days(days: number | null): string {
+	return days === null ? 'disabled' : `${days} day(s)`;
+}
+
+export function format_max_mb(max_mb: number | null): string {
+	return max_mb === null ? 'disabled' : `${max_mb} MiB`;
+}
+
+export function format_kib(bytes: number): string {
+	return `${Math.round(bytes / 1024)} KiB`;
+}
+
+export function format_output_limit(
+	bytes: number,
+	lines: number,
+): string {
+	return `${format_kib(bytes)} / ${lines} lines`;
+}
+
+export function format_context_settings_status(
+	stats: ContextStats,
+): string {
+	const saved = load_context_settings_config();
+	const capture_limits = get_context_capture_limits();
+	const mcp_limits = get_context_mcp_output_limits();
+	return [
+		'## context-sidecar settings',
+		'',
+		`- Config path: ${get_context_settings_config_path()}`,
+		`- Saved preset: ${saved?.preset ?? '(none; using built-in defaults)'}`,
+		`- Effective retention: ${format_days(stats.retention_days)}`,
+		`- Effective max size: ${format_max_mb(stats.max_mb)}`,
+		`- Effective purge on shutdown: ${stats.purge_on_shutdown}`,
+		`- Effective tool capture threshold: ${format_output_limit(capture_limits.max_bytes, capture_limits.max_lines)}`,
+		`- Effective MCP capture threshold: ${format_output_limit(mcp_limits.max_bytes, mcp_limits.max_lines)}`,
+		'',
+		'Presets:',
+		...Object.entries(CONTEXT_SETTINGS_PRESETS).map(
+			([key, preset]) => `- ${key}: ${preset.description}`,
+		),
+		'',
+		'Usage:',
+		'- /context settings <preset>',
+		'- /context settings custom <days|off> <max-mb|off> [capture-kb] [capture-lines] [purge-on-shutdown]',
+	].join('\n');
+}
