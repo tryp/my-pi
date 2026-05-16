@@ -1,5 +1,21 @@
 # @spences10/pi-context
 
+## 0.0.15
+
+### Patch Changes
+
+- e14275b: Improve pi-context search fallback behavior and add
+  deterministic before-after eval harness for retrieval scenarios
+- bea8707: Add package-specific homepage links so Pi gallery pages
+  point to each package README.
+- 7db4cfc: Improve context retrieval guidance, cross-session dedupe,
+  source-id scoping, and expanded eval coverage.
+- 3e91b90: Add shared package gallery preview image to all Pi package
+  manifests.
+- Updated dependencies [bea8707]
+- Updated dependencies [3e91b90]
+  - @spences10/pi-redact@0.0.8
+
 ## 0.0.14
 
 ### Patch Changes
