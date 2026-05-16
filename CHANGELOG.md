@@ -1,5 +1,15 @@
 # @spences10/pi-context
 
+## 0.0.14
+
+### Patch Changes
+
+- 8944bf8: Move Pi core runtime packages to peer dependencies for
+  safer external extension installs.
+- Updated dependencies [8944bf8]
+  - @spences10/pi-tui-modal@0.0.13
+  - @spences10/pi-redact@0.0.7
+
 ## 0.0.13
 
 ### Patch Changes
