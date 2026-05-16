@@ -12,6 +12,7 @@ import {
 	count_lines,
 	escape_fts5_query,
 	make_preview,
+	relaxed_fts5_query,
 	should_index_text,
 	summarize_source,
 } from './text.js';
@@ -39,9 +40,9 @@ export {
 	parse_context_retention_policy,
 } from './policy.js';
 export {
+	count_lines,
 	DEFAULT_CONTEXT_MAX_BYTES,
 	DEFAULT_CONTEXT_MAX_LINES,
-	count_lines,
 	escape_fts5_query,
 	make_preview,
 	should_index_text,
@@ -438,7 +439,30 @@ export class ContextStore {
 		} = {},
 	): ContextSearchResult[] {
 		const limit = Math.max(1, Math.min(options.limit ?? 5, 25));
-		const match = escape_fts5_query(query);
+		const strict = escape_fts5_query(query);
+		const relaxed = relaxed_fts5_query(query);
+		const results = this.search_match(strict, options, limit);
+		if (results.length >= limit || !relaxed || relaxed === strict)
+			return results;
+
+		const seen = new Set(results.map((result) => result.chunk_id));
+		for (const result of this.search_match(relaxed, options, limit)) {
+			if (seen.has(result.chunk_id)) continue;
+			results.push(result);
+			seen.add(result.chunk_id);
+			if (results.length >= limit) break;
+		}
+		return results;
+	}
+
+	private search_match(
+		match: string,
+		options: ContextScopeOptions & {
+			source_id?: string;
+			tool_name?: string;
+		},
+		limit: number,
+	): ContextSearchResult[] {
 		const scoped = this.scoped_filter('context_sources', options);
 		const filters: string[] = [...scoped.where];
 		const params: Array<string | number> = [match, ...scoped.params];
