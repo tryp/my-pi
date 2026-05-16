@@ -2,6 +2,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { fileURLToPath } from 'node:url';
 import { Type } from 'typebox';
 import {
+	format_get_result,
 	format_list_results,
 	format_purge_details,
 	format_search_results,
@@ -152,38 +153,16 @@ export default function context_sidecar(pi: ExtensionAPI): void {
 				params.chunk_id,
 				scope_options,
 			);
-			let text = chunks.length
-				? chunks
-						.map((chunk) =>
-							[
-								`## ${chunk.id}`,
-								`Source: ${chunk.source_id} • Chunk ${chunk.ordinal}`,
-								'',
-								chunk.content,
-							].join('\n'),
-						)
-						.join('\n\n---\n\n')
-				: 'No chunks found.';
 			const summary =
-				chunks.length === 0 && params.chunk_id
+				chunks.length === 0
 					? store.chunk_summary(params.source_id, scope_options)
 					: null;
-			if (summary && summary.chunk_count > 0) {
-				const range =
-					summary.first_chunk_id === summary.last_chunk_id
-						? summary.first_chunk_id
-						: `${summary.first_chunk_id} … ${summary.last_chunk_id}`;
-				text = [
-					`No chunk found for chunk_id "${params.chunk_id}".`,
-					`Source ${params.source_id} has ${summary.chunk_count} chunk(s): ${range}.`,
-					`Valid ordinals: ${summary.first_ordinal} … ${summary.last_ordinal}.`,
-					summary.first_chunk_id
-						? `Try chunk_id:"${summary.first_chunk_id}" or chunk_id:"1".`
-						: undefined,
-				]
-					.filter((line): line is string => line !== undefined)
-					.join('\n');
-			}
+			const text = format_get_result(
+				params.source_id,
+				params.chunk_id,
+				chunks,
+				summary,
+			);
 			return {
 				content: [{ type: 'text' as const, text }],
 				details: { count: chunks.length },
@@ -449,7 +428,10 @@ export type {
 	ContextSettingsPreset,
 	ContextSettingsValues,
 } from './config.js';
-export { run_context_eval, run_context_eval_cli } from './eval.js';
+export {
+	run_context_eval,
+	run_context_eval_cli,
+} from './eval/index.js';
 export {
 	get_context_store,
 	is_context_sidecar_enabled,
@@ -474,6 +456,6 @@ if (
 	process.argv[1] &&
 	fileURLToPath(import.meta.url) === process.argv[1]
 ) {
-	const { run_context_eval_cli } = await import('./eval.js');
+	const { run_context_eval_cli } = await import('./eval/index.js');
 	await run_context_eval_cli();
 }

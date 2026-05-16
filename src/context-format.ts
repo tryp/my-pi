@@ -7,6 +7,8 @@ import {
 } from './config.js';
 import {
 	is_context_sidecar_enabled,
+	type ContextChunk,
+	type ContextChunkSummary,
 	type ContextListResult,
 	type ContextPurgeDetails,
 	type ContextSearchResult,
@@ -27,6 +29,50 @@ export function format_search_results(
 			].join('\n'),
 		)
 		.join('\n\n---\n\n');
+}
+
+export function format_get_result(
+	source_id: string,
+	chunk_id: string | undefined,
+	chunks: ContextChunk[],
+	summary: ContextChunkSummary | null,
+): string {
+	if (chunks.length > 0) {
+		return chunks
+			.map((chunk) =>
+				[
+					`## ${chunk.id}`,
+					`Source: ${chunk.source_id} • Chunk ${chunk.ordinal}`,
+					'',
+					chunk.content,
+				].join('\n'),
+			)
+			.join('\n\n---\n\n');
+	}
+
+	if (!summary) {
+		return [
+			`Source ${source_id} was not found in the context sidecar.`,
+			'It may have expired, been purged, or belonged to a different local context database.',
+			'Try context_list to inspect available sources, or rerun the original tool if the content is still needed.',
+		].join('\n');
+	}
+
+	if (!chunk_id) return 'No chunks found.';
+	const range =
+		summary.first_chunk_id === summary.last_chunk_id
+			? summary.first_chunk_id
+			: `${summary.first_chunk_id} … ${summary.last_chunk_id}`;
+	return [
+		`No chunk found for chunk_id "${chunk_id}".`,
+		`Source ${source_id} has ${summary.chunk_count} chunk(s): ${range}.`,
+		`Valid ordinals: ${summary.first_ordinal} … ${summary.last_ordinal}.`,
+		summary.first_chunk_id
+			? `Try chunk_id:"${summary.first_chunk_id}" or chunk_id:"1".`
+			: undefined,
+	]
+		.filter((line): line is string => line !== undefined)
+		.join('\n');
 }
 
 export function format_list_results(

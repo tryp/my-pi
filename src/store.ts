@@ -255,7 +255,6 @@ export class ContextStore {
 		const project_path = input.project_path ?? this.project_path;
 		const preview = make_preview(text);
 		const duplicate = this.find_duplicate_source(content_hash, {
-			session_id,
 			project_path,
 		});
 		if (duplicate) {
@@ -463,7 +462,9 @@ export class ContextStore {
 		},
 		limit: number,
 	): ContextSearchResult[] {
-		const scoped = this.scoped_filter('context_sources', options);
+		const scoped = options.source_id
+			? { where: [], params: [] }
+			: this.scoped_filter('context_sources', options);
 		const filters: string[] = [...scoped.where];
 		const params: Array<string | number> = [match, ...scoped.params];
 		if (options.source_id) {
@@ -533,9 +534,11 @@ export class ContextStore {
 
 	chunk_summary(
 		source_id: string,
-		options: ContextScopeOptions = {},
+		_options: ContextScopeOptions = {},
 	): ContextChunkSummary | null {
-		const scoped = this.scoped_filter('context_sources', options);
+		const scoped = this.scoped_filter('context_sources', {
+			global: true,
+		});
 		const filters = ['context_sources.id = ?', ...scoped.where];
 		const params: Array<string | number> = [
 			source_id,
@@ -570,9 +573,11 @@ export class ContextStore {
 	get(
 		source_id: string,
 		chunk_id?: string,
-		options: ContextScopeOptions = {},
+		_options: ContextScopeOptions = {},
 	): ContextChunk[] {
-		const scoped = this.scoped_filter('context_sources', options);
+		const scoped = this.scoped_filter('context_sources', {
+			global: true,
+		});
 		const filters = ['context_chunks.source_id = ?', ...scoped.where];
 		const params: Array<string | number> = [
 			source_id,
