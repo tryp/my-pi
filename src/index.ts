@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { fileURLToPath } from 'node:url';
 import { Type } from 'typebox';
 import {
 	format_list_results,
@@ -448,6 +449,7 @@ export type {
 	ContextSettingsPreset,
 	ContextSettingsValues,
 } from './config.js';
+export { run_context_eval, run_context_eval_cli } from './eval.js';
 export {
 	get_context_store,
 	is_context_sidecar_enabled,
@@ -467,3 +469,11 @@ export type {
 	StoreContextInput,
 	StoredContextOutput,
 } from './store.js';
+
+if (
+	process.argv[1] &&
+	fileURLToPath(import.meta.url) === process.argv[1]
+) {
+	const { run_context_eval_cli } = await import('./eval.js');
+	await run_context_eval_cli();
+}

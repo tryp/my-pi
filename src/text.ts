@@ -36,24 +36,73 @@ export function escape_fts5_query(query: string): string {
 		);
 	}
 
-	const tokens = trimmed
+	const tokens = normalized_fts_tokens(trimmed).map(format_fts_token);
+	return tokens.length > 0 ? tokens.join(' ') : '""';
+}
+
+export function relaxed_fts5_query(query: string): string | null {
+	const normalized = normalized_fts_tokens(query);
+	if (normalized.length < 2) return null;
+	const tokens = normalized
+		.flatMap((token) =>
+			token.value.split(/\s+/).map((value) => ({
+				value,
+				prefix: token.prefix,
+			})),
+		)
+		.filter((token) => token.value.length > 1)
+		.filter(
+			(token) =>
+				!new Set([
+					'and',
+					'or',
+					'not',
+					'the',
+					'this',
+					'that',
+					'with',
+					'from',
+					'into',
+					'specific',
+					'chunk',
+					'line',
+				]).has(token.value.toLowerCase()),
+		)
+		.slice(0, 12)
+		.map(format_fts_token);
+
+	if (tokens.length === 0) return null;
+	return tokens.join(' OR ');
+}
+
+function normalized_fts_tokens(
+	query: string,
+): Array<{ value: string; prefix: boolean }> {
+	return query
+		.trim()
 		.split(/\s+/)
 		.map((token) => token.trim())
 		.filter(Boolean)
 		.map((token) => {
-			const is_prefix = token.endsWith('*');
-			const base = is_prefix ? token.slice(0, -1) : token;
-			const safe = base
-				.replace(/["'(){}[\]^:./\\+-]/g, ' ')
-				.trim()
-				.replace(/\s+/g, ' ');
-			if (!safe) return '';
-			const quoted = `"${safe.replace(/"/g, '""')}"`;
-			return is_prefix ? `${quoted}*` : quoted;
+			const prefix = token.endsWith('*');
+			const base = prefix ? token.slice(0, -1) : token;
+			return {
+				prefix,
+				value: base
+					.replace(/["'(){}[\]^:./\\+-]/g, ' ')
+					.trim()
+					.replace(/\s+/g, ' '),
+			};
 		})
-		.filter(Boolean);
+		.filter((token) => token.value.length > 0);
+}
 
-	return tokens.length > 0 ? tokens.join(' ') : '""';
+function format_fts_token(token: {
+	value: string;
+	prefix: boolean;
+}): string {
+	const quoted = `"${token.value.replace(/"/g, '""')}"`;
+	return token.prefix ? `${quoted}*` : quoted;
 }
 
 export function make_preview(
