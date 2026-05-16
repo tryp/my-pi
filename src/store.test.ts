@@ -237,7 +237,7 @@ describe('ContextStore', () => {
 		}
 	});
 
-	it('deduplicates identical redacted content within the same scope only', () => {
+	it('deduplicates identical redacted content across sessions in the same project', () => {
 		const store = create_store({
 			max_bytes: 10,
 			project_path: '/repo',
@@ -256,8 +256,9 @@ describe('ContextStore', () => {
 		expect(duplicate?.source_id).toBe(first?.source_id);
 		expect(duplicate?.deduped).toBe(true);
 		expect(duplicate?.receipt).toContain('reused existing');
-		expect(other_session?.source_id).not.toBe(first?.source_id);
-		expect(store.list({ global: true })).toHaveLength(2);
+		expect(other_session?.source_id).toBe(first?.source_id);
+		expect(other_session?.deduped).toBe(true);
+		expect(store.list({ global: true })).toHaveLength(1);
 		const db = new DatabaseSync(store.db_path, {
 			enableForeignKeyConstraints: true,
 		});
@@ -266,7 +267,7 @@ describe('ContextStore', () => {
 				db
 					.prepare('SELECT COUNT(*) as count FROM context_chunks')
 					.get(),
-			).toMatchObject({ count: 2 });
+			).toMatchObject({ count: 1 });
 		} finally {
 			close_db(db);
 		}
@@ -347,7 +348,9 @@ describe('ContextStore', () => {
 		const scoped = store.search('shared-token');
 		expect(scoped).toHaveLength(1);
 		expect(scoped[0].content).toContain('current-session');
-		expect(store.get(other!.source_id)).toEqual([]);
+		expect(store.get(other!.source_id)).toHaveLength(
+			other!.chunk_count,
+		);
 		expect(
 			store.get(other!.source_id, undefined, { global: true }),
 		).toHaveLength(other!.chunk_count);

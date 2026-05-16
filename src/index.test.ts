@@ -521,6 +521,9 @@ describe('context_sidecar extension', () => {
 			.execute('call-5', {
 				source_id,
 			});
-		expect(empty.content[0].text).toBe('No chunks found.');
+		expect(empty.content[0].text).toContain(
+			`Source ${source_id} was not found`,
+		);
+		expect(empty.content[0].text).toContain('expired');
 	});
 });
