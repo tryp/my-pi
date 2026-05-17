@@ -1,5 +1,15 @@
 # @spences10/pi-context
 
+## 0.0.19
+
+### Patch Changes
+
+- a040ea3: Standardize package scripts through Vite+ and refresh
+  README badges/development guidance across published packages.
+- Updated dependencies [a040ea3]
+  - @spences10/pi-tui-modal@0.0.17
+  - @spences10/pi-redact@0.0.10
+
 ## 0.0.18
 
 ### Patch Changes
