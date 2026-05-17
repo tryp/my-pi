@@ -1,5 +1,10 @@
 # @spences10/pi-context
 
+[![built with Vite+](https://img.shields.io/badge/built%20with-Vite+-646CFF?logo=vite&logoColor=white)](https://viteplus.dev)
+[![tested with Vitest](https://img.shields.io/badge/tested%20with-Vitest-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev)
+[![npm version](https://img.shields.io/npm/v/@spences10/pi-context?color=CB3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/@spences10/pi-context)
+[![license](https://img.shields.io/npm/l/@spences10/pi-context)](https://www.npmjs.com/package/@spences10/pi-context)
+
 Local SQLite context sidecar for Pi. Oversized text tool output is
 redacted, stored in an FTS5-backed database, and replaced with a
 compact receipt that shows the source id, project/session scope, and
@@ -130,3 +135,14 @@ This is redacted local persistence and retrieval, not a security
 sandbox. Stored text is redacted with `@spences10/pi-redact` before
 persistence, but anything persisted in the local SQLite DB should
 still be treated as local tool output.
+
+## Development
+
+Package scripts build transitive workspace dependencies first, then
+run local tools through Vite+ with `vp exec`.
+
+```bash
+pnpm --filter @spences10/pi-context run check
+pnpm --filter @spences10/pi-context run test
+pnpm --filter @spences10/pi-context run build
+```
