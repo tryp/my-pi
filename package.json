@@ -50,9 +50,10 @@
 		"@spences10/pi-tui-modal": "workspace:*"
 	},
 	"devDependencies": {
-		"@types/node": "^25.8.0",
-		"typescript": "^6.0.3",
-		"vitest": "^4.1.6"
+		"@earendil-works/pi-coding-agent": "catalog:",
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
