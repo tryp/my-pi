@@ -1,5 +1,17 @@
 # @spences10/pi-context
 
+## 0.0.20
+
+### Patch Changes
+
+- 7bc2581: Improve context sidecar TUI text formatting, global stats display,
+  readable sizes, and remove markdown artifacts.
+- 599b355: Improve package README openings and descriptions to emphasize user
+  benefits and clarify pi-skills/pi-recall positioning.
+- Updated dependencies [599b355]
+  - @spences10/pi-tui-modal@0.0.18
+  - @spences10/pi-redact@0.0.11
+
 ## 0.0.19
 
 ### Patch Changes
