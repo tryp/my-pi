@@ -37,12 +37,12 @@
 	},
 	"scripts": {
 		"build": "pnpm --filter \"$npm_package_name^...\" run build:self && pnpm run build:self",
-		"build:self": "tsc -p tsconfig.build.json && cp src/schema.sql dist/schema.sql",
+		"build:self": "vp exec tsc -p tsconfig.build.json && cp src/schema.sql dist/schema.sql",
 		"check": "pnpm --filter \"$npm_package_name^...\" run build:self && pnpm run check:self",
-		"check:self": "tsc --noEmit",
+		"check:self": "vp exec tsc --noEmit",
 		"test": "pnpm --filter \"$npm_package_name^...\" run build:self && pnpm run build:self && pnpm run test:self",
-		"test:self": "vitest run",
-		"coverage:self": "vitest run --coverage",
+		"test:self": "vp exec vitest run",
+		"coverage:self": "vp exec vitest run --coverage",
 		"coverage": "pnpm --filter \"$npm_package_name^...\" run build:self && pnpm run coverage:self"
 	},
 	"dependencies": {
