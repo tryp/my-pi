@@ -182,9 +182,19 @@ export async function show_context_stats(
 	ctx: ExtensionCommandContext,
 ): Promise<void> {
 	const scope = scope_from_context(ctx);
-	const text = format_stats(get_context_store(scope).stats(scope));
+	const text = format_stats(
+		get_context_store(scope).stats({ global: true }),
+		{
+			audience: 'tui',
+			title: false,
+		},
+	);
 	if (ctx.hasUI) {
-		await show_context_text_modal(ctx, 'Context sidecar stats', text);
+		await show_context_text_modal(
+			ctx,
+			'Context sidecar stats',
+			`\n${text}`,
+		);
 	} else {
 		ctx.ui.notify(text, 'info');
 	}
@@ -376,7 +386,10 @@ export async function show_context_settings(
 			await show_context_text_modal(
 				ctx,
 				'Context sidecar settings',
-				format_context_settings_status(stats),
+				format_context_settings_status(stats, {
+					audience: 'tui',
+					title: false,
+				}),
 			);
 		}
 	}
@@ -400,8 +413,12 @@ export async function handle_context_settings(
 	}
 	if (kind === 'show' || kind === 'current') {
 		const scope = scope_from_context(ctx);
+		const stats = get_context_store(scope).stats(scope);
 		const text = format_context_settings_status(
-			get_context_store(scope).stats(scope),
+			stats,
+			ctx.hasUI
+				? { audience: 'tui', title: false }
+				: { audience: 'tool' },
 		);
 		if (ctx.hasUI) {
 			await show_context_text_modal(

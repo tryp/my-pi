@@ -14,6 +14,7 @@ import {
 	type ContextSearchResult,
 	type ContextStats,
 } from './store.js';
+import { format_bytes } from './text.js';
 
 export function format_search_results(
 	results: ContextSearchResult[],
@@ -77,15 +78,18 @@ export function format_get_result(
 
 export function format_list_results(
 	results: ContextListResult[],
+	options: { audience?: 'tool' | 'tui' } = { audience: 'tool' },
 ): string {
 	if (results.length === 0)
 		return 'No indexed context sources found.';
 	return results
 		.map((result) =>
 			[
-				`## ${result.source_id}`,
+				options.audience === 'tui'
+					? result.source_id
+					: `## ${result.source_id}`,
 				`Created: ${new Date(result.created_at).toISOString()} • Tool: ${result.tool_name}`,
-				`Size: ${result.bytes} bytes, ${result.lines} lines, ${result.chunk_count} chunks`,
+				`Size: ${format_bytes(result.bytes)}, ${result.lines.toLocaleString()} lines, ${result.chunk_count.toLocaleString()} chunks`,
 				`Project: ${result.project_path ?? '(none)'}`,
 				`Session: ${result.session_id ?? '(none)'}`,
 				result.input_summary
@@ -122,32 +126,44 @@ export function format_purge_details(
 	return `Deleted ${details.deleted} context source(s).${filters ? ` Filters: ${filters}.` : ''}`;
 }
 
-export function format_stats(stats: ContextStats): string {
+export function format_stats(
+	stats: ContextStats,
+	options: { audience?: 'tool' | 'tui'; title?: boolean } = {
+		audience: 'tool',
+		title: true,
+	},
+): string {
 	const scoped = stats.scope_project_path || stats.scope_session_id;
-	return [
-		'## context-sidecar stats',
-		'',
-		`- Enabled: ${is_context_sidecar_enabled()}`,
+	const rows = [
+		`Enabled: ${is_context_sidecar_enabled()}`,
 		scoped
-			? `- Scope: project=${stats.scope_project_path ?? '(none)'}, session=${stats.scope_session_id ?? '(none)'}`
-			: '- Scope: global',
-		`- Scoped sources: ${stats.sources}`,
-		`- Scoped chunks: ${stats.chunks}`,
-		`- Scoped raw bytes stored: ${stats.bytes_stored}`,
-		`- Global sources: ${stats.global_sources}`,
-		`- Global chunks: ${stats.global_chunks}`,
-		`- Global raw bytes stored: ${stats.global_bytes_stored}`,
-		`- Bytes returned: ${stats.bytes_returned}`,
-		`- Bytes saved: ${stats.bytes_saved}`,
-		`- Reduction: ${stats.reduction_pct}%`,
-		`- DB bytes: ${stats.total_bytes}`,
-		`- Scoped oldest source: ${format_timestamp(stats.oldest_created_at)}`,
-		`- Scoped newest source: ${format_timestamp(stats.newest_created_at)}`,
-		`- Global oldest source: ${format_timestamp(stats.global_oldest_created_at)}`,
-		`- Global newest source: ${format_timestamp(stats.global_newest_created_at)}`,
-		`- Retention days: ${stats.retention_days ?? 'disabled'}`,
-		`- Purge on shutdown: ${stats.purge_on_shutdown}`,
-		`- Max DB size: ${stats.max_mb === null ? 'disabled' : `${stats.max_mb} MiB`}`,
+			? `Scope: project=${stats.scope_project_path ?? '(none)'}, session=${stats.scope_session_id ?? '(none)'}`
+			: 'Scope: global',
+		`Reduction: ${stats.reduction_pct}%`,
+		`Saved from chat: ${format_bytes(stats.bytes_saved)} (${stats.bytes_saved.toLocaleString()} bytes)`,
+		`Sources: ${stats.sources.toLocaleString()}`,
+		`Chunks: ${stats.chunks.toLocaleString()}`,
+		`Raw stored: ${format_bytes(stats.bytes_stored)} (${stats.bytes_stored.toLocaleString()} bytes)`,
+		`Returned to chat: ${format_bytes(stats.bytes_returned)} (${stats.bytes_returned.toLocaleString()} bytes)`,
+		`Database size: ${format_bytes(stats.total_bytes)} (${stats.total_bytes.toLocaleString()} bytes)`,
+		`Oldest source: ${format_timestamp(stats.oldest_created_at)}`,
+		`Newest source: ${format_timestamp(stats.newest_created_at)}`,
+		`Retention days: ${stats.retention_days ?? 'disabled'}`,
+		`Purge on shutdown: ${stats.purge_on_shutdown}`,
+		`Max DB size: ${stats.max_mb === null ? 'disabled' : `${stats.max_mb} MiB`}`,
+	];
+	if (options.audience === 'tui')
+		return [
+			...(options.title === false
+				? []
+				: ['context-sidecar stats', '']),
+			...rows,
+		].join('\n');
+	return [
+		...(options.title === false
+			? []
+			: ['## context-sidecar stats', '']),
+		...rows.map((row) => `- ${row}`),
 	].join('\n');
 }
 
@@ -178,28 +194,53 @@ export function format_output_limit(
 
 export function format_context_settings_status(
 	stats: ContextStats,
+	options: { audience?: 'tool' | 'tui'; title?: boolean } = {
+		audience: 'tool',
+		title: true,
+	},
 ): string {
 	const saved = load_context_settings_config();
 	const capture_limits = get_context_capture_limits();
 	const mcp_limits = get_context_mcp_output_limits();
+	const rows = [
+		`Config path: ${get_context_settings_config_path()}`,
+		`Saved preset: ${saved?.preset ?? '(none; using built-in defaults)'}`,
+		`Effective retention: ${format_days(stats.retention_days)}`,
+		`Effective max size: ${format_max_mb(stats.max_mb)}`,
+		`Effective purge on shutdown: ${stats.purge_on_shutdown}`,
+		`Effective tool capture threshold: ${format_output_limit(capture_limits.max_bytes, capture_limits.max_lines)}`,
+		`Effective MCP capture threshold: ${format_output_limit(mcp_limits.max_bytes, mcp_limits.max_lines)}`,
+	];
+	const presets = Object.entries(CONTEXT_SETTINGS_PRESETS).map(
+		([key, preset]) => `${key}: ${preset.description}`,
+	);
+	const usage = [
+		'/context settings <preset>',
+		'/context settings custom <days|off> <max-mb|off> [capture-kb] [capture-lines] [purge-on-shutdown]',
+	];
+	if (options.audience === 'tui')
+		return [
+			...(options.title === false
+				? []
+				: ['context-sidecar settings', '']),
+			...rows,
+			'',
+			'Presets:',
+			...presets,
+			'',
+			'Usage:',
+			...usage,
+		].join('\n');
 	return [
-		'## context-sidecar settings',
-		'',
-		`- Config path: ${get_context_settings_config_path()}`,
-		`- Saved preset: ${saved?.preset ?? '(none; using built-in defaults)'}`,
-		`- Effective retention: ${format_days(stats.retention_days)}`,
-		`- Effective max size: ${format_max_mb(stats.max_mb)}`,
-		`- Effective purge on shutdown: ${stats.purge_on_shutdown}`,
-		`- Effective tool capture threshold: ${format_output_limit(capture_limits.max_bytes, capture_limits.max_lines)}`,
-		`- Effective MCP capture threshold: ${format_output_limit(mcp_limits.max_bytes, mcp_limits.max_lines)}`,
+		...(options.title === false
+			? []
+			: ['## context-sidecar settings', '']),
+		...rows.map((row) => `- ${row}`),
 		'',
 		'Presets:',
-		...Object.entries(CONTEXT_SETTINGS_PRESETS).map(
-			([key, preset]) => `- ${key}: ${preset.description}`,
-		),
+		...presets.map((preset) => `- ${preset}`),
 		'',
 		'Usage:',
-		'- /context settings <preset>',
-		'- /context settings custom <days|off> <max-mb|off> [capture-kb] [capture-lines] [purge-on-shutdown]',
+		...usage.map((line) => `- ${line}`),
 	].join('\n');
 }

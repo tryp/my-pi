@@ -501,9 +501,8 @@ describe('context_sidecar extension', () => {
 				},
 			},
 		});
-		expect(notifications[0]).toContain(
-			'info:## context-sidecar stats',
-		);
+		expect(notifications[0]).toContain('info:Enabled: true');
+		expect(notifications[0]).toContain('Scope: global');
 
 		const purge = await fake.tools
 			.get('context_purge')!
