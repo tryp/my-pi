@@ -22,6 +22,7 @@ export async function show_context_list(
 	const scope = scope_from_context(ctx);
 	const text = format_list_results(
 		get_context_store(scope).list({ ...scope, limit }),
+		{ audience: 'tui' },
 	);
 	if (ctx.hasUI) {
 		await show_context_text_modal(
