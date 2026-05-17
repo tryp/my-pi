@@ -1,7 +1,7 @@
 {
 	"name": "@spences10/pi-context",
 	"version": "0.0.19",
-	"description": "Pi extension for local SQLite context sidecar storage and retrieval of large tool output",
+	"description": "Searchable local SQLite sidecar that keeps oversized Pi tool output useful without flooding model context",
 	"keywords": [
 		"context",
 		"evals",
