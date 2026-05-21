@@ -47,6 +47,7 @@
 	},
 	"dependencies": {
 		"@spences10/pi-redact": "workspace:*",
+		"@spences10/pi-settings": "workspace:*",
 		"@spences10/pi-tui-modal": "workspace:*"
 	},
 	"devDependencies": {

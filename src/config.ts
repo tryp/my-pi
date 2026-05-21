@@ -1,4 +1,8 @@
 import {
+	read_package_settings,
+	write_package_settings,
+} from '@spences10/pi-settings';
+import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -153,12 +157,18 @@ export function context_settings_from_preset(
 
 export function load_context_settings_config(): ContextSettingsConfig | null {
 	const path = get_context_settings_config_path();
-	if (!existsSync(path)) return null;
-
 	try {
-		const parsed = JSON.parse(
-			readFileSync(path, 'utf-8'),
-		) as Partial<ContextSettingsConfig>;
+		const parsed = (
+			process.env.MY_PI_CONTEXT_CONFIG
+				? existsSync(path)
+					? JSON.parse(readFileSync(path, 'utf-8'))
+					: null
+				: read_package_settings<Partial<ContextSettingsConfig> | null>(
+						'context',
+						null,
+					)
+		) as Partial<ContextSettingsConfig> | null;
+		if (!parsed) return null;
 		return normalize_context_settings_config(parsed);
 	} catch {
 		return null;
@@ -168,6 +178,10 @@ export function load_context_settings_config(): ContextSettingsConfig | null {
 export function save_context_settings_config(
 	config: ContextSettingsConfig,
 ): void {
+	if (!process.env.MY_PI_CONTEXT_CONFIG) {
+		write_package_settings('context', config);
+		return;
+	}
 	const path = get_context_settings_config_path();
 	const dir = dirname(path);
 	if (!existsSync(dir))
