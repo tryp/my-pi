@@ -1,5 +1,14 @@
 # @spences10/pi-context
 
+## 0.0.24
+
+### Patch Changes
+
+- 59f41de: Split context store registry, retrieval, and maintenance
+  helpers into focused modules with co-located tests.
+- 8e07202: Fix context_stats global mode to match context menu by
+  avoiding accidental current-session scoping.
+
 ## 0.0.23
 
 ### Patch Changes
