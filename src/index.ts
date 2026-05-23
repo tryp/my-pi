@@ -252,10 +252,19 @@ export default function context_sidecar(pi: ExtensionAPI): void {
 		label: 'Context Stats',
 		description:
 			'Show byte accounting for the local SQLite context sidecar.',
-		parameters: Type.Object({}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+		parameters: Type.Object({
+			global: Type.Optional(
+				Type.Boolean({
+					description:
+						'Show stats across all indexed sources instead of current project/session scope.',
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const scope = scope_from_context(ctx);
-			const stats = get_context_store(scope).stats(scope);
+			const stats = get_context_store(scope).stats(
+				params.global === true ? { global: true } : scope,
+			);
 			return {
 				content: [
 					{ type: 'text' as const, text: format_stats(stats) },

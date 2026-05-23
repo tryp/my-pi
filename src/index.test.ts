@@ -493,6 +493,46 @@ describe('context_sidecar extension', () => {
 		expect(stats.content[0].text).toContain('context-sidecar stats');
 		expect(stats.details).toMatchObject({ sources: 1, chunks: 1 });
 
+		get_context_store({
+			project_path: '/other/project',
+			session_id: '/sessions/other.jsonl',
+		}).store({
+			text: `${large_output('other-scope-token')}\n${'z '.repeat(100)}`,
+			tool_name: 'bash',
+			force: true,
+			project_path: '/other/project',
+			session_id: '/sessions/other.jsonl',
+		});
+
+		const scoped_stats = await fake.tools
+			.get('context_stats')!
+			.execute(
+				'call-3a',
+				{},
+				undefined,
+				undefined,
+				fake_context(process.cwd()),
+			);
+		expect(scoped_stats.details).toMatchObject({
+			sources: 1,
+			global_sources: 2,
+		});
+
+		const global_stats = await fake.tools
+			.get('context_stats')!
+			.execute(
+				'call-3b',
+				{ global: true },
+				undefined,
+				undefined,
+				fake_context('/tmp/project', '/sessions/current.jsonl'),
+			);
+		expect(global_stats.content[0].text).toContain('Scope: global');
+		expect(global_stats.details).toMatchObject({
+			sources: 2,
+			global_sources: 2,
+		});
+
 		const notifications: string[] = [];
 		await fake.commands.get('context-stats')!.handler([], {
 			ui: {
