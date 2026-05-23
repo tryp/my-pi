@@ -738,6 +738,41 @@ describe('global context store helpers', () => {
 		);
 	});
 
+	it('reconfigures the reused store through the public helper', () => {
+		const db_path = temp_db();
+		set_context_sidecar_enabled(true, {
+			db_path,
+			max_bytes: 10,
+			project_path: '/project-a',
+			session_id: 'session-a',
+		});
+		maybe_store_context_output({
+			text: `alpha-scope\n${'x '.repeat(100)}`,
+			tool_name: 'bash',
+		});
+
+		set_context_sidecar_enabled(true, {
+			db_path,
+			max_bytes: 10,
+			project_path: '/project-b',
+			session_id: 'session-b',
+		});
+		maybe_store_context_output({
+			text: `beta-scope\n${'x '.repeat(100)}`,
+			tool_name: 'bash',
+		});
+
+		const store = get_context_store();
+		expect(store.search('alpha-scope')).toHaveLength(0);
+		expect(store.search('beta-scope')).toHaveLength(1);
+		expect(
+			store.search('alpha-scope', {
+				project_path: '/project-a',
+				session_id: 'session-a',
+			}),
+		).toHaveLength(1);
+	});
+
 	it('builds the default db path from env overrides', () => {
 		const original_db = process.env.MY_PI_CONTEXT_DB;
 		const original_agent_dir = process.env.PI_CODING_AGENT_DIR;

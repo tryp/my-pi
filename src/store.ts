@@ -1,12 +1,26 @@
 import { redact_text } from '@spences10/pi-redact';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { get_context_capture_limits } from './config.js';
 import { parse_context_retention_policy } from './policy.js';
 import { apply_schema } from './schema.js';
+import {
+	context_store_cleanup,
+	context_store_purge_to_max_stored_bytes,
+	context_store_purge_with_details,
+	context_store_stats,
+} from './store/maintenance.js';
+import {
+	context_store_chunk_summary,
+	context_store_get,
+} from './store/retrieval.js';
+import {
+	default_context_db_path,
+	get_context_store as get_context_store_with_ctor,
+	maybe_store_context_output as maybe_store_context_output_with_ctor,
+} from './store/registry.js';
 import {
 	chunk_text,
 	count_lines,
@@ -17,7 +31,6 @@ import {
 	summarize_source,
 } from './text.js';
 import type {
-	ChunkSummaryRow,
 	ContextChunk,
 	ContextChunkSummary,
 	ContextCleanupResult,
@@ -47,6 +60,11 @@ export {
 	make_preview,
 	should_index_text,
 } from './text.js';
+export {
+	default_context_db_path,
+	is_context_sidecar_enabled,
+	set_context_sidecar_enabled,
+} from './store/registry.js';
 export type {
 	ContextChunk,
 	ContextChunkSummary,
@@ -62,68 +80,26 @@ export type {
 	StoredContextOutput,
 } from './types.js';
 
-let global_options: ContextStoreOptions = {};
-let global_enabled = false;
-let global_store: ContextStore | null = null;
-
-function escape_regexp(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-export function default_context_db_path(): string {
-	if (process.env.MY_PI_CONTEXT_DB)
-		return process.env.MY_PI_CONTEXT_DB;
-	const agent_dir =
-		process.env.PI_CODING_AGENT_DIR ??
-		join(
-			process.env.HOME ?? process.env.USERPROFILE ?? homedir(),
-			'.pi',
-			'agent',
-		);
-	return join(agent_dir, 'context.db');
-}
-
-export function set_context_sidecar_enabled(
-	enabled: boolean,
-	options: ContextStoreOptions = {},
-): void {
-	global_enabled = enabled;
-	if (!enabled) {
-		global_options = {};
-		global_store = null;
-		return;
-	}
-	global_options = { ...global_options, ...options };
-}
-
-export function is_context_sidecar_enabled(): boolean {
-	return global_enabled;
-}
-
 export function get_context_store(
 	options: ContextStoreOptions = {},
 ): ContextStore {
-	const merged = { ...global_options, ...options };
-	const db_path = merged.db_path ?? default_context_db_path();
-	if (!global_store || global_store.db_path !== db_path) {
-		global_store = new ContextStore({ ...merged, db_path });
-	} else {
-		global_store.configure(merged);
-	}
-	return global_store;
+	return get_context_store_with_ctor(ContextStore, options);
 }
 
 export function maybe_store_context_output(
 	input: StoreContextInput,
 	options: ContextStoreOptions = {},
 ): StoredContextOutput | null {
-	if (!global_enabled) return null;
-	return get_context_store(options).store(input);
+	return maybe_store_context_output_with_ctor(
+		ContextStore,
+		input,
+		options,
+	);
 }
 
 export class ContextStore {
 	readonly db_path: string;
-	private db: DatabaseSync;
+	db: DatabaseSync;
 	private project_path: string | null;
 	private session_id: string | null;
 	private max_bytes: number;
@@ -156,7 +132,7 @@ export class ContextStore {
 		this.max_lines = options.max_lines ?? capture_limits.max_lines;
 	}
 
-	private scoped_filter(
+	scoped_filter(
 		alias: string,
 		options: ContextScopeOptions = {},
 	): ScopedFilter {
@@ -514,235 +490,35 @@ export class ContextStore {
 		);
 	}
 
-	private chunk_reference_to_ordinal(
-		source_id: string,
-		chunk_id: string,
-	): number | null {
-		const trimmed = chunk_id.trim();
-		const legacy_match = new RegExp(
-			`^${escape_regexp(source_id)}:chunk:(\\d+)$`,
-		).exec(trimmed);
-		if (legacy_match) {
-			const value = Number.parseInt(legacy_match[1]!, 10);
-			if (!Number.isSafeInteger(value)) return null;
-			return value <= 0 ? 1 : value;
-		}
-		if (!/^\d+$/.test(trimmed)) return null;
-		const value = Number.parseInt(trimmed, 10);
-		return Number.isSafeInteger(value) && value > 0 ? value : null;
-	}
-
 	chunk_summary(
 		source_id: string,
-		_options: ContextScopeOptions = {},
+		options: ContextScopeOptions = {},
 	): ContextChunkSummary | null {
-		const scoped = this.scoped_filter('context_sources', {
-			global: true,
-		});
-		const filters = ['context_sources.id = ?', ...scoped.where];
-		const params: Array<string | number> = [
-			source_id,
-			...scoped.params,
-		];
-		const row = this.db
-			.prepare(`
-				SELECT
-					context_sources.id as source_id,
-					COUNT(context_chunks.id) as chunk_count,
-					(
-						SELECT first_chunk.id FROM context_chunks first_chunk
-						WHERE first_chunk.source_id = context_sources.id
-						ORDER BY first_chunk.ordinal LIMIT 1
-					) as first_chunk_id,
-					(
-						SELECT last_chunk.id FROM context_chunks last_chunk
-						WHERE last_chunk.source_id = context_sources.id
-						ORDER BY last_chunk.ordinal DESC LIMIT 1
-					) as last_chunk_id,
-					MIN(context_chunks.ordinal) as first_ordinal,
-					MAX(context_chunks.ordinal) as last_ordinal
-				FROM context_sources
-				LEFT JOIN context_chunks ON context_chunks.source_id = context_sources.id
-				WHERE ${filters.join(' AND ')}
-				GROUP BY context_sources.id
-			`)
-			.get(...params) as ChunkSummaryRow | undefined;
-		return row ?? null;
+		return context_store_chunk_summary(this, source_id, options);
 	}
 
 	get(
 		source_id: string,
 		chunk_id?: string,
-		_options: ContextScopeOptions = {},
+		options: ContextScopeOptions = {},
 	): ContextChunk[] {
-		const scoped = this.scoped_filter('context_sources', {
-			global: true,
-		});
-		const filters = ['context_chunks.source_id = ?', ...scoped.where];
-		const params: Array<string | number> = [
-			source_id,
-			...scoped.params,
-		];
-		if (chunk_id) {
-			const ordinal = this.chunk_reference_to_ordinal(
-				source_id,
-				chunk_id,
-			);
-			if (ordinal) {
-				filters.push('context_chunks.ordinal = ?');
-				params.push(ordinal);
-			} else {
-				filters.push('context_chunks.id = ?');
-				params.push(chunk_id);
-			}
-		}
-		const stmt = this.db.prepare(`
-			SELECT
-				context_chunks.id,
-				context_chunks.source_id,
-				context_chunks.ordinal,
-				context_chunks.title,
-				context_chunks.content,
-				context_chunks.byte_count
-			FROM context_chunks
-			JOIN context_sources ON context_sources.id = context_chunks.source_id
-			WHERE ${filters.join(' AND ')}
-			ORDER BY context_chunks.ordinal
-		`);
-		return stmt.all(...params) as unknown as ContextChunk[];
-	}
-
-	private count_stats(options: ContextScopeOptions): {
-		sources: number;
-		chunks: number;
-		bytes_stored: number;
-		bytes_returned: number;
-		oldest_created_at: number | null;
-		newest_created_at: number | null;
-	} {
-		const scoped = this.scoped_filter('context_sources', options);
-		const where_clause = scoped.where.length
-			? `WHERE ${scoped.where.join(' AND ')}`
-			: '';
-		const source = this.db
-			.prepare(`
-				SELECT
-					COUNT(*) as sources,
-					COALESCE(SUM(byte_count), 0) as bytes_stored,
-					COALESCE(SUM(returned_byte_count), 0) as bytes_returned,
-					MIN(created_at) as oldest_created_at,
-					MAX(created_at) as newest_created_at
-				FROM context_sources
-				${where_clause}
-			`)
-			.get(...scoped.params) as {
-			sources: number;
-			bytes_stored: number;
-			bytes_returned: number;
-			oldest_created_at: number | null;
-			newest_created_at: number | null;
-		};
-		const chunks = this.db
-			.prepare(`
-				SELECT COUNT(context_chunks.id) as chunks
-				FROM context_chunks
-				JOIN context_sources ON context_sources.id = context_chunks.source_id
-				${where_clause}
-			`)
-			.get(...scoped.params) as { chunks: number };
-		return { ...source, chunks: chunks.chunks };
+		return context_store_get(this, source_id, chunk_id, options);
 	}
 
 	stats(
 		options: ContextScopeOptions = { global: true },
 	): ContextStats {
-		const source = this.count_stats(options);
-		const global = options.global
-			? source
-			: this.count_stats({ global: true });
-		const bytes_saved = source.bytes_stored - source.bytes_returned;
-		const reduction_pct =
-			source.bytes_stored > 0
-				? Math.round((bytes_saved / source.bytes_stored) * 1000) / 10
-				: 0;
-		const db_bytes = file_size(this.db_path);
-		const wal_bytes = file_size(`${this.db_path}-wal`);
-		const policy = parse_context_retention_policy();
-		return {
-			sources: source.sources,
-			chunks: source.chunks,
-			bytes_stored: source.bytes_stored,
-			bytes_returned: source.bytes_returned,
-			bytes_saved,
-			reduction_pct,
-			db_bytes,
-			wal_bytes,
-			total_bytes: db_bytes + wal_bytes,
-			oldest_created_at: source.oldest_created_at,
-			newest_created_at: source.newest_created_at,
-			retention_days: policy.retention_days,
-			purge_on_shutdown: policy.purge_on_shutdown,
-			max_mb: policy.max_mb,
-			scope_project_path:
-				options.global === true
-					? null
-					: (options.project_path ?? null),
-			scope_session_id:
-				options.global === true ? null : (options.session_id ?? null),
-			global_sources: global.sources,
-			global_chunks: global.chunks,
-			global_bytes_stored: global.bytes_stored,
-			global_oldest_created_at: global.oldest_created_at,
-			global_newest_created_at: global.newest_created_at,
-		};
+		return context_store_stats(this, options);
 	}
 
 	cleanup(
 		policy: ContextRetentionPolicy = parse_context_retention_policy(),
 	): ContextCleanupResult {
-		let age_deleted = 0;
-		if (policy.retention_days !== null) {
-			age_deleted = this.purge({
-				older_than_days: policy.retention_days,
-			});
-		}
-		const size_deleted = policy.max_bytes
-			? this.purge_to_max_stored_bytes(policy.max_bytes)
-			: 0;
-		return {
-			deleted: age_deleted + size_deleted,
-			age_deleted,
-			size_deleted,
-			policy,
-		};
+		return context_store_cleanup(this, policy);
 	}
 
-	private purge_to_max_stored_bytes(max_bytes: number): number {
-		const total_row = this.db
-			.prepare(
-				'SELECT COALESCE(SUM(byte_count), 0) as bytes FROM context_sources',
-			)
-			.get() as { bytes: number };
-		let total = total_row.bytes;
-		if (total <= max_bytes) return 0;
-		const rows = this.db
-			.prepare(
-				'SELECT id, byte_count FROM context_sources ORDER BY created_at ASC',
-			)
-			.all() as Array<{ id: string; byte_count: number }>;
-		const delete_source = this.db.prepare(
-			'DELETE FROM context_sources WHERE id = ?',
-		);
-		let deleted = 0;
-		for (const row of rows) {
-			if (total <= max_bytes) break;
-			const result = delete_source.run(row.id);
-			if (Number(result.changes ?? 0) > 0) {
-				deleted += 1;
-				total -= row.byte_count;
-			}
-		}
-		return deleted;
+	purge_to_max_stored_bytes(max_bytes: number): number {
+		return context_store_purge_to_max_stored_bytes(this, max_bytes);
 	}
 
 	purge(
@@ -760,52 +536,10 @@ export class ContextStore {
 			source_id?: string;
 		} = {},
 	): ContextPurgeDetails {
-		const filters: string[] = [];
-		const params: Array<string | number> = [];
-		if (options.source_id) {
-			filters.push('id = ?');
-			params.push(options.source_id);
-		}
-		if (options.project_path === null) {
-			filters.push('project_path IS NULL');
-		} else if (options.project_path !== undefined) {
-			filters.push('project_path = ?');
-			params.push(options.project_path);
-		}
-		if (options.session_id === null) {
-			filters.push('session_id IS NULL');
-		} else if (options.session_id !== undefined) {
-			filters.push('session_id = ?');
-			params.push(options.session_id);
-		}
-		const days = options.older_than_days;
-		if (days !== undefined) {
-			const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-			filters.push('created_at < ?');
-			params.push(cutoff);
-		}
-		if (filters.length === 0) {
-			return { deleted: 0 };
-		}
-		const result = this.db
-			.prepare(
-				`DELETE FROM context_sources WHERE ${filters.join(' AND ')}`,
-			)
-			.run(...params);
-		return {
-			deleted: Number(result.changes ?? 0),
-			source_id: options.source_id,
-			project_path: options.project_path,
-			session_id: options.session_id,
-			older_than_days: options.older_than_days,
-		};
+		return context_store_purge_with_details(this, options);
 	}
 
 	close(): void {
 		this.db.close();
 	}
-}
-
-function file_size(path: string): number {
-	return existsSync(path) ? statSync(path).size : 0;
 }
