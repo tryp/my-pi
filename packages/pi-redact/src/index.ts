@@ -77,7 +77,8 @@ const SECRET_PATTERNS: SecretPattern[] = [
 	},
 	{
 		name: 'Kagi API Key',
-		pattern: /[a-zA-Z0-9_-]{40,}\.[a-zA-Z0-9_-]{40,}/g,
+		pattern:
+			/(?<![a-zA-Z0-9_-])[a-zA-Z0-9_-]{40,}\.[a-zA-Z0-9_-]{40,}(?![a-zA-Z0-9_-])/g,
 	},
 	{
 		name: 'Brave API Key',
@@ -298,17 +299,12 @@ function is_text_content(
 	return item.type === 'text';
 }
 
-export function redact_text(
+const MAX_REDACTION_CHUNK_CHARS = 256 * 1024;
+
+function redact_text_chunk(
 	text: string,
 	options?: RedactionOptions,
 ): RedactionResult {
-	if (options?.force_private_key && text) {
-		return {
-			redacted: '[REDACTED:Private Key continuation]',
-			count: 1,
-		};
-	}
-
 	let count = 0;
 	let result = text;
 
@@ -327,6 +323,34 @@ export function redact_text(
 	count += secret_redaction.count;
 
 	return { redacted: result, count };
+}
+
+export function redact_text(
+	text: string,
+	options?: RedactionOptions,
+): RedactionResult {
+	if (options?.force_private_key && text) {
+		return {
+			redacted: '[REDACTED:Private Key continuation]',
+			count: 1,
+		};
+	}
+
+	if (text.length <= MAX_REDACTION_CHUNK_CHARS) {
+		return redact_text_chunk(text, options);
+	}
+
+	let count = 0;
+	let redacted = '';
+	for (let offset = 0; offset < text.length; offset += MAX_REDACTION_CHUNK_CHARS) {
+		const chunk = redact_text_chunk(
+			text.slice(offset, offset + MAX_REDACTION_CHUNK_CHARS),
+			options,
+		);
+		redacted += chunk.redacted;
+		count += chunk.count;
+	}
+	return { redacted, count };
 }
 
 export default async function filter_output(pi: ExtensionAPI) {

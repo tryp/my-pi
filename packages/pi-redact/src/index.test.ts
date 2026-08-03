@@ -14,6 +14,14 @@ describe('redact_text', () => {
 		expect(redacted).not.toContain('AKIA1234567890ABCDEF');
 	});
 
+	it('handles multi-megabyte single-line output without overflowing the regex stack', () => {
+		const input = `prefix Bearer ${'a'.repeat(32)} ${'x'.repeat(10 * 1024 * 1024)}`;
+		const { redacted, count } = redact_text(input);
+		expect(count).toBe(1);
+		expect(redacted).toContain('[REDACTED:Bearer Token]');
+		expect(redacted).not.toBe(input);
+	});
+
 	it('redacts AWS temp access keys', () => {
 		const input = 'key: ASIA1234567890ABCDEF';
 		const { redacted, count } = redact_text(input);
