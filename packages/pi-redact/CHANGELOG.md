@@ -1,5 +1,17 @@
 # @spences10/pi-redact
 
+## 0.0.15
+
+### Patch Changes
+
+- 4dc9deb: Chunk large-input redaction into 256 KiB windows so a
+  multi-megabyte single-line tool result can no longer drive the Kagi
+  API key pattern (and other bounded-repeat patterns) into catastrophic
+  regex work that dies with `RangeError: Maximum call stack size
+  exceeded`. The Kagi pattern is additionally tightened with
+  lookarounds so a 40+ character run embedded in a longer identifier is
+  not misclassified as a key boundary.
+
 ## 0.0.14
 
 ### Patch Changes
