@@ -372,6 +372,71 @@ describe('redact_text', () => {
 		);
 	});
 
+	it('tracks ordered and split private-key markers across sequential reads in source and built output', async () => {
+		for (const extension of [filter_output, built_dist.default]) {
+			let handler:
+				| ((event: Record<string, unknown>) => unknown)
+				| undefined;
+			const pi = {
+				on(name: string, callback: (event: Record<string, unknown>) => unknown) {
+					if (name === 'tool_result') handler = callback;
+				},
+				registerCommand() {},
+			};
+			await extension(pi as never);
+
+			const ordered_path = `/tmp/ordered-private-key-${Math.random()}.pem`;
+			await handler?.({
+				toolName: 'read',
+				input: { path: ordered_path },
+				content: [{
+					type: 'text',
+					text: `-----END PRIVATE KEY-----\nclosed block\n-----BEGIN PRIVATE KEY-----`,
+				}],
+			});
+			const ordered_result = (await handler?.({
+				toolName: 'read',
+				input: { path: ordered_path, offset: 2 },
+				content: [{ type: 'text', text: 'ORDERED_KEY_MATERIAL_MUST_NOT_LEAK' }],
+			})) as { content?: Array<{ text?: string }> };
+			expect(ordered_result.content?.[0]?.text).not.toContain(
+				'ORDERED_KEY_MATERIAL_MUST_NOT_LEAK',
+			);
+
+			const split_path = `/tmp/split-marker-private-key-${Math.random()}.pem`;
+			await handler?.({
+				toolName: 'read',
+				input: { path: split_path },
+				content: [{ type: 'text', text: '-----BEG' }],
+			});
+			const split_begin = (await handler?.({
+				toolName: 'read',
+				input: { path: split_path, offset: 1 },
+				content: [{ type: 'text', text: `IN PRIVATE KEY-----\nSPLIT_BEGIN_KEY_MATERIAL` }],
+			})) as { content?: Array<{ text?: string }> };
+			expect(split_begin.content?.[0]?.text).not.toContain(
+				'SPLIT_BEGIN_KEY_MATERIAL',
+			);
+
+			await handler?.({
+				toolName: 'read',
+				input: { path: split_path, offset: 2 },
+				content: [{ type: 'text', text: 'SPLIT_END_KEY_MATERIAL-----END PRI' }],
+			});
+			await handler?.({
+				toolName: 'read',
+				input: { path: split_path, offset: 3 },
+				content: [{ type: 'text', text: 'VATE KEY-----' }],
+			});
+			const after_end = await handler?.({
+				toolName: 'read',
+				input: { path: split_path, offset: 4 },
+				content: [{ type: 'text', text: 'ordinary public text' }],
+			});
+			expect(after_end).toBeUndefined();
+		}
+	});
+
 	it('redacts private-key continuations split across text content blocks', async () => {
 		let tool_result_handler:
 			| ((event: Record<string, unknown>) => unknown)

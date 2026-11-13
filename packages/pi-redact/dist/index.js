@@ -7,6 +7,53 @@ const MAX_FORMAT_WHITESPACE_CHARS = 64;
 const MAX_SSH_LINE_CHARS = 8_192;
 const PRIVATE_KEY_BEGIN_PATTERN = /-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/;
 const PRIVATE_KEY_END_PATTERN = /-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/;
+const PRIVATE_KEY_MARKER_PATTERN = /-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----|-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/g;
+const PRIVATE_KEY_MARKER_TAIL_CHARS = 105 - 1;
+function get_private_key_marker_tail(text) {
+    const begin = text.lastIndexOf('-----BEGIN');
+    const end = text.lastIndexOf('-----END');
+    const marker_start = Math.max(begin, end);
+    if (marker_start >= 0) {
+        const suffix = text.slice(marker_start);
+        if (suffix.length <= PRIVATE_KEY_MARKER_TAIL_CHARS &&
+            /^-----(?:BEGIN|END)[ \tA-Za-z0-9_-]*$/.test(suffix)) {
+            return suffix;
+        }
+    }
+    for (const marker_prefix of ['-----BEGIN', '-----END']) {
+        for (let length = marker_prefix.length - 1; length > 0; length--) {
+            const suffix = text.slice(-length);
+            if (marker_prefix.startsWith(suffix))
+                return suffix;
+        }
+    }
+    return '';
+}
+function scan_private_key_state(text, open_count, marker_tail) {
+    const combined = marker_tail + text;
+    const prior_chunk_length = marker_tail.length;
+    let begin_crossed_chunk = false;
+    PRIVATE_KEY_MARKER_PATTERN.lastIndex = 0;
+    let marker;
+    while ((marker = PRIVATE_KEY_MARKER_PATTERN.exec(combined)) !== null) {
+        if (marker.index + marker[0].length <= prior_chunk_length)
+            continue;
+        const is_begin = marker[0].startsWith('-----BEGIN');
+        if (is_begin) {
+            if (marker.index < prior_chunk_length)
+                begin_crossed_chunk = true;
+            open_count++;
+        }
+        else if (open_count > 0) {
+            open_count--;
+        }
+    }
+    return {
+        open_count,
+        marker_tail: get_private_key_marker_tail(combined),
+        begin_crossed_chunk,
+    };
+}
 // Provider patterns consume their complete format-alphabet candidate. Fixed-
 // width provider formats retain exact widths; minimum lengths remain heuristics.
 const SECRET_PATTERNS = initialize_pattern_registry([
@@ -298,7 +345,7 @@ export function redact_text(text, options) {
 }
 export default async function filter_output(pi) {
     let total_redacted = 0;
-    const partial_private_key_paths = new Set();
+    const partial_private_key_paths = new Map();
     pi.on('tool_result', async (event) => {
         if (!event.content)
             return;
@@ -312,33 +359,37 @@ export default async function filter_output(pi) {
         const normalized_input_path = input_path
             ? resolve(input_path)
             : undefined;
-        let private_key_continuation = Boolean(normalized_input_path &&
-            partial_private_key_paths.has(normalized_input_path));
+        const existing_private_key_state = normalized_input_path
+            ? partial_private_key_paths.get(normalized_input_path)
+            : undefined;
+        let private_key_open_count = existing_private_key_state?.open_count ?? 0;
+        let private_key_continuation = private_key_open_count > 0;
+        let private_key_marker_tail = existing_private_key_state?.marker_tail ?? '';
         let modified = false;
         const new_content = event.content.map((item) => {
             if (!is_text_content(item) || !item.text)
                 return item;
+            const private_key_scan = scan_private_key_state(item.text, private_key_open_count, private_key_marker_tail);
             const { redacted, count } = redact_text(item.text, {
                 force_ssh_config,
-                force_private_key: private_key_continuation,
+                force_private_key: private_key_continuation ||
+                    private_key_scan.begin_crossed_chunk,
             });
             if (count > 0) {
                 modified = true;
                 total_redacted += count;
             }
-            const has_private_key_begin = PRIVATE_KEY_BEGIN_PATTERN.test(item.text);
-            const has_private_key_end = PRIVATE_KEY_END_PATTERN.test(item.text);
-            if (private_key_continuation && has_private_key_end) {
-                private_key_continuation = false;
-            }
-            if (has_private_key_begin) {
-                private_key_continuation = !has_private_key_end;
-            }
+            private_key_open_count = private_key_scan.open_count;
+            private_key_continuation = private_key_open_count > 0;
+            private_key_marker_tail = private_key_scan.marker_tail;
             return { ...item, text: redacted };
         });
         if (normalized_input_path) {
-            if (private_key_continuation) {
-                partial_private_key_paths.add(normalized_input_path);
+            if (private_key_continuation || private_key_marker_tail) {
+                partial_private_key_paths.set(normalized_input_path, {
+                    open_count: private_key_open_count,
+                    marker_tail: private_key_marker_tail,
+                });
             }
             else {
                 partial_private_key_paths.delete(normalized_input_path);
