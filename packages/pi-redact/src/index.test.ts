@@ -1,4 +1,10 @@
+import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
+import {
+	MAX_REDACTION_CHUNK_CHARS,
+	REDACTION_OVERLAP_CHARS,
+	replace_owned_matches,
+} from './windowed-replace.js';
 import filter_output, {
 	looks_like_ssh_config,
 	redact_ssh_config_metadata,
@@ -14,12 +20,127 @@ describe('redact_text', () => {
 		expect(redacted).not.toContain('AKIA1234567890ABCDEF');
 	});
 
-	it('handles multi-megabyte single-line output without overflowing the regex stack', () => {
+	it('handles multi-megabyte single-line output under two seconds', () => {
 		const input = `prefix Bearer ${'a'.repeat(32)} ${'x'.repeat(10 * 1024 * 1024)}`;
+		const started = performance.now();
 		const { redacted, count } = redact_text(input);
+		const duration_ms = performance.now() - started;
 		expect(count).toBe(1);
 		expect(redacted).toContain('[REDACTED:Bearer Token]');
 		expect(redacted).not.toBe(input);
+		expect(duration_ms).toBeLessThan(2_000);
+		if (process.env.PI_REDACT_PERF_REPORT === '1') {
+			console.info(`pi-redact 10 MiB duration: ${duration_ms.toFixed(1)} ms`);
+		}
+	});
+
+	it('redacts a Kagi credential straddling the 256 KiB seam', () => {
+		const chunk = 256 * 1024;
+		const credential = `${'A'.repeat(40)}.${'B'.repeat(40)}`;
+		const input = `${'.'.repeat(chunk - 40)}${credential}`;
+		const { redacted, count } = redact_text(input);
+		expect(count).toBeGreaterThanOrEqual(1);
+		expect(redacted).toContain('[REDACTED:Kagi API Key]');
+		expect(redacted).not.toContain(credential);
+	});
+
+	it('redacts credentials at every start offset around the core seam', () => {
+		const chunk = MAX_REDACTION_CHUNK_CHARS;
+		const credential = `${'A'.repeat(40)}.${'B'.repeat(40)}`;
+		const pieces: string[] = [];
+		let cursor = 0;
+		let expected_count = 0;
+		for (let delta = -120; delta <= 120; delta++) {
+			const seam = (expected_count + 1) * chunk;
+			const start = seam + delta;
+			pieces.push('.'.repeat(start - cursor), credential);
+			cursor = start + credential.length;
+			expected_count++;
+		}
+		const input = pieces.join('');
+		const kagi_pattern =
+			/(?<![a-zA-Z0-9_-])[a-zA-Z0-9_-]{40,200}\.[a-zA-Z0-9_-]{40,200}(?![a-zA-Z0-9_-])/g;
+		const { redacted, count } = replace_owned_matches(
+			input,
+			kagi_pattern,
+			() => '[REDACTED:Kagi API Key]',
+			chunk,
+			REDACTION_OVERLAP_CHARS,
+		);
+		expect(count).toBe(expected_count);
+		expect(redacted).not.toContain(credential);
+	});
+
+	it('contains a maximum-length JWT match in the seam overlap', () => {
+		const chunk = 256 * 1024;
+		const jwt = `eyJ${'A'.repeat(8192)}.${'B'.repeat(8192)}.${'C'.repeat(8192)}`;
+		const input = `${'.'.repeat(chunk - 1)}${jwt}`;
+		const { redacted, count } = redact_text(input);
+		expect(jwt.length).toBe(24_581);
+		expect(count).toBe(1);
+		expect(redacted).toContain('[REDACTED:JWT]');
+		expect(redacted).not.toContain(jwt);
+	});
+
+	it('counts a seam-spanning credential once and a window-2 credential once', () => {
+		const chunk = 256 * 1024;
+		const first = `${'A'.repeat(40)}.${'B'.repeat(40)}`;
+		const second = `${'C'.repeat(40)}.${'D'.repeat(40)}`;
+		const input =
+			'.'.repeat(chunk - 20) +
+			first +
+			'.'.repeat(2 * chunk + 200 - (chunk - 20 + first.length)) +
+			second;
+		const { redacted, count } = redact_text(input);
+		expect(count).toBe(2);
+		expect(redacted).not.toContain(first);
+		expect(redacted).not.toContain(second);
+	});
+
+	it('applies absolute-offset edits safely across three windows', () => {
+		const chunk = 256 * 1024;
+		const credentials = [
+			`${'A'.repeat(40)}.${'B'.repeat(40)}`,
+			`${'C'.repeat(40)}.${'D'.repeat(40)}`,
+			`${'E'.repeat(40)}.${'F'.repeat(40)}`,
+		];
+		const input =
+			credentials[0] +
+			'.'.repeat(chunk + 100 - credentials[0].length) +
+			credentials[1] +
+			'.'.repeat(chunk + 100 - credentials[1].length) +
+			credentials[2];
+		const { redacted, count } = redact_text(input);
+		expect(count).toBe(3);
+		for (const credential of credentials) {
+			expect(redacted).not.toContain(credential);
+		}
+		expect(redacted).toContain('AAAA');
+		expect(redacted).toContain('CCCC');
+		expect(redacted).toContain('EEEE');
+	});
+
+	it('keeps single-window output byte-identical to direct pattern replacement', () => {
+		const input = 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456';
+		const expected = input.replace(
+			/Bearer[ \t]{1,64}[a-zA-Z0-9._-]{20,256}(?![a-zA-Z0-9._-])/g,
+			(match) =>
+				`${match.slice(0, 4)}${'*'.repeat(Math.min(match.length - 4, 20))}[REDACTED:Bearer Token]`,
+		);
+		expect(redact_text(input)).toEqual({ redacted: expected, count: 1 });
+	});
+
+	it('does not partially match credentials beyond their documented ceilings', () => {
+		const provider_token = `sk-${'a'.repeat(257)}`;
+		const kagi_token = `${'A'.repeat(201)}.${'B'.repeat(40)}`;
+		expect(redact_text(provider_token)).toEqual({
+			redacted: provider_token,
+			count: 0,
+		});
+		expect(redact_text(kagi_token)).toEqual({
+			redacted: kagi_token,
+			count: 0,
+		});
 	});
 
 	it('redacts AWS temp access keys', () => {

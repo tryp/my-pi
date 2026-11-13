@@ -1,5 +1,14 @@
 # @spences10/pi-redact
 
+## 0.0.18
+
+### Patch Changes
+
+- Bound variable credential spans to documented format maxima and use
+  overlapping, start-owned windows. This fixes credentials split across
+  the 256 KiB seam without double-counting or shifting replacement offsets.
+  Inputs beyond a pattern's documented maximum are not partially matched.
+
 ## 0.0.17
 
 ### Patch Changes
