@@ -9,15 +9,11 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { resolve } from 'node:path';
 import {
 	initialize_pattern_registry,
-	MAX_JWT_COMPONENT_CHARS,
 	MAX_REDACTION_CHUNK_CHARS,
 	MAX_REDACTION_MATCH_CHARS,
 	REDACTION_OVERLAP_CHARS,
 	replace_owned_matches as replace_windowed_matches,
-	type BoundedPattern,
 } from './windowed-replace.js';
-
-type SecretPattern = BoundedPattern;
 
 interface RedactionResult {
 	redacted: string;
@@ -29,14 +25,6 @@ interface RedactionOptions {
 	force_private_key?: boolean;
 }
 
-// Credential spans are capped to real-format maxima so each match fits in an
-// overlapping window. PEM bodies allow 16 KiB: comfortably above an 8 KiB RSA
-// PKCS#8 PEM (about 11 KiB base64 plus line breaks and headers).
-const MAX_PRIVATE_KEY_BODY_CHARS = 16_384;
-// JWT components are independently capped at 8 KiB; their derived maximum
-// defines the overlap in windowed-replace.ts.
-// Escaped JSON characters consume up to two source chars per regex unit.
-const MAX_SECRET_VALUE_CHARS = MAX_PRIVATE_KEY_BODY_CHARS / 2;
 const MAX_FIELD_NAME_CHARS = 64;
 const MAX_FORMAT_WHITESPACE_CHARS = 64;
 const MAX_SSH_LINE_CHARS = 8_192;
@@ -46,39 +34,35 @@ const PRIVATE_KEY_BEGIN_PATTERN =
 const PRIVATE_KEY_END_PATTERN =
 	/-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/;
 
-// Provider tokens below use a 256-character ceiling (the known formats are
-// fixed-size or short opaque tokens); AWS access keys are fixed at 20 chars.
-// Kagi keys are two 40-character runs in the known format; 200 per run gives
-// 5x headroom while preventing arbitrary log runs from becoming credentials.
-// JWT permits 8 KiB per component to cover large real claims/signatures;
-// SendGrid permits 8 KiB per component for large API-key IDs/secrets.
+// Provider patterns consume their complete format-alphabet candidate. Fixed-
+// width provider formats retain exact widths; minimum lengths remain heuristics.
 const SECRET_PATTERNS = initialize_pattern_registry([
 	{ name: 'AWS Access Key', pattern: /AKIA[A-Z0-9]{16}(?![A-Z0-9])/g, max_match_chars: 20 },
 	{ name: 'AWS Temp Access Key', pattern: /ASIA[A-Z0-9]{16}(?![A-Z0-9])/g, max_match_chars: 20 },
 	{
 		name: 'AWS Secret Key',
 		pattern:
-			/\b(?:AWS_SECRET_ACCESS_KEY|aws_secret_access_key|secret_access_key|SecretAccessKey)\b[ \t]{0,64}[:=][ \t]{0,64}["']?[A-Za-z0-9/+=]{40,256}(?![A-Za-z0-9/+=])["']?/g,
+			/\b(?:AWS_SECRET_ACCESS_KEY|aws_secret_access_key|secret_access_key|SecretAccessKey)\b[ \t]{0,64}[:=][ \t]{0,64}["']?[A-Za-z0-9/+=]{40,}(?![A-Za-z0-9/+=])["']?/g,
 		max_match_chars: 512,
 	},
 	{
 		name: 'Bearer Token',
-		pattern: /Bearer[ \t]{1,64}[a-zA-Z0-9._-]{20,256}(?![a-zA-Z0-9._-])/g,
+		pattern: /Bearer[ \t]{1,64}[a-zA-Z0-9._-]{20,}(?![a-zA-Z0-9._-])/g,
 		max_match_chars: 326,
 	},
 	{
 		name: 'OpenAI/Anthropic API Key',
-		pattern: /sk-[a-zA-Z0-9._-]{20,256}(?![a-zA-Z0-9._-])/g,
+		pattern: /sk-[a-zA-Z0-9._-]{20,}(?![a-zA-Z0-9._-])/g,
 		max_match_chars: 259,
 	},
 	{
 		name: 'Stripe Live Key',
-		pattern: /sk_live_[a-zA-Z0-9]{20,256}(?![a-zA-Z0-9])/g,
+		pattern: /sk_live_[a-zA-Z0-9]{20,}(?![a-zA-Z0-9])/g,
 		max_match_chars: 264,
 	},
 	{
 		name: 'Stripe Test Key',
-		pattern: /sk_test_[a-zA-Z0-9]{20,256}(?![a-zA-Z0-9])/g,
+		pattern: /sk_test_[a-zA-Z0-9]{20,}(?![a-zA-Z0-9])/g,
 		max_match_chars: 264,
 	},
 	{
@@ -90,34 +74,28 @@ const SECRET_PATTERNS = initialize_pattern_registry([
 	{
 		name: 'Private Key',
 		pattern:
-			/-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----[\s\S]{0,16384}?(?:-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----|$)/g,
-		max_match_chars: 16_594,
+			/-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----[\s\S]*?(?:-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----|$)/g,
+		max_match_chars: Number.MAX_SAFE_INTEGER,
 	},
 	{
 		name: 'Connection String with Password',
-		pattern: /\b[a-z][a-z0-9+.-]{0,63}:\/\/[^:\s/?#]{1,256}:[^@\s/?#]{1,4096}@/gi,
-		max_match_chars: 4_421,
+		pattern: /\b[a-z][a-z0-9+.-]{0,63}:\/\/[^:\s/?#]+:[^@\s/?#]+@/gi,
+		max_match_chars: Number.MAX_SAFE_INTEGER,
 	},
 	{
 		name: 'Generic Secret Phrase',
 		pattern:
-			/\b(?:password|passwd|secret|token|api[_-]?key)\b[ \t]{1,64}(?:is|was|seen|value|header)[ \t]{1,64}["']?[A-Za-z0-9._:/+=@!-]{12,4096}(?![A-Za-z0-9._:/+=@!-])["']?/gi,
+			/\b(?:password|passwd|secret|token|api[_-]?key)\b[ \t]{1,64}(?:is|was|seen|value|header)[ \t]{1,64}["']?[A-Za-z0-9._:/+=@!-]{12,}(?![A-Za-z0-9._:/+=@!-])["']?/gi,
 		max_match_chars: 8_192,
 	},
 	{
 		name: 'Tavily API Key',
-		pattern: /tvly-[a-zA-Z0-9_-]{20,256}(?![a-zA-Z0-9_-])/g,
+		pattern: /tvly-[a-zA-Z0-9_-]{20,}(?![a-zA-Z0-9_-])/g,
 		max_match_chars: 261,
 	},
 	{
-		name: 'Kagi API Key',
-		pattern:
-			/(?<![a-zA-Z0-9_-])[a-zA-Z0-9_-]{40,200}\.[a-zA-Z0-9_-]{40,200}(?![a-zA-Z0-9_-])/g,
-		max_match_chars: 401,
-	},
-	{
 		name: 'Brave API Key',
-		pattern: /BSA[A-Z0-9]{20,256}(?![A-Z0-9])/g,
+		pattern: /BSA[A-Z0-9]{20,}(?![A-Z0-9])/g,
 		max_match_chars: 259,
 	},
 	{
@@ -127,30 +105,30 @@ const SECRET_PATTERNS = initialize_pattern_registry([
 	},
 	{
 		name: 'GitHub Token',
-		pattern: /gh[pousr]_[a-zA-Z0-9]{36,256}(?![a-zA-Z0-9])/g,
+		pattern: /gh[pousr]_[a-zA-Z0-9]{36,}(?![a-zA-Z0-9])/g,
 		max_match_chars: 260,
 	},
 	{
 		name: 'GitHub Fine-grained PAT',
-		pattern: /github_pat_[a-zA-Z0-9_]{20,256}(?![a-zA-Z0-9_])/g,
+		pattern: /github_pat_[a-zA-Z0-9_]{20,}(?![a-zA-Z0-9_])/g,
 		max_match_chars: 267,
 	},
 	{
 		name: 'JWT',
 		pattern: new RegExp(
-			`eyJ[A-Za-z0-9_-]{8,${MAX_JWT_COMPONENT_CHARS}}\\.[A-Za-z0-9_-]{8,${MAX_JWT_COMPONENT_CHARS}}\\.[A-Za-z0-9_-]{8,${MAX_JWT_COMPONENT_CHARS}}(?![A-Za-z0-9_-])`,
+			`eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])`,
 			'g',
 		),
 		max_match_chars: MAX_REDACTION_MATCH_CHARS,
 	},
 	{
 		name: 'Slack Token',
-		pattern: /xox[baprs]-[A-Za-z0-9-]{20,256}(?![A-Za-z0-9-])/g,
+		pattern: /xox[baprs]-[A-Za-z0-9-]{20,}(?![A-Za-z0-9-])/g,
 		max_match_chars: 261,
 	},
 	{
 		name: 'GitLab Token',
-		pattern: /glpat-[A-Za-z0-9_-]{20,256}(?![A-Za-z0-9_-])/g,
+		pattern: /glpat-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g,
 		max_match_chars: 262,
 	},
 	{
@@ -160,12 +138,12 @@ const SECRET_PATTERNS = initialize_pattern_registry([
 	},
 	{
 		name: 'npm Token',
-		pattern: /npm_[A-Za-z0-9]{36,256}(?![A-Za-z0-9])/g,
+		pattern: /npm_[A-Za-z0-9]{36,}(?![A-Za-z0-9])/g,
 		max_match_chars: 260,
 	},
 	{
 		name: 'SendGrid API Key',
-		pattern: /SG\.[A-Za-z0-9_-]{16,8192}\.[A-Za-z0-9_-]{32,8192}(?![A-Za-z0-9_-])/g,
+		pattern: /SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])/g,
 		max_match_chars: 16_388,
 	},
 ], REDACTION_OVERLAP_CHARS);
@@ -175,23 +153,23 @@ const SECRET_FIELD_NAME =
 const JSON_SECRET_FIELD_NAME =
 	`[A-Za-z0-9_-]{0,${MAX_FIELD_NAME_CHARS}}(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)`;
 const DOUBLE_QUOTED_JSON_SECRET_FIELD_PATTERN = new RegExp(
-	`(^|[^A-Za-z0-9_-])((?:"${JSON_SECRET_FIELD_NAME}")[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}:[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}")((?:\\\\.|[^"\\\\]){8,${MAX_SECRET_VALUE_CHARS}})"`,
+	`(^|[^A-Za-z0-9_-])((?:"${JSON_SECRET_FIELD_NAME}")[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}:[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}")((?:\\\\.|[^"\\\\]){8,})(?:"|$)`,
 	'gim',
 );
 const SINGLE_QUOTED_JSON_SECRET_FIELD_PATTERN = new RegExp(
-	`(^|[^A-Za-z0-9_-])((?:'${JSON_SECRET_FIELD_NAME}')[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}:[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}')((?:\\\\.|[^'\\\\]){8,${MAX_SECRET_VALUE_CHARS}})'`,
+	`(^|[^A-Za-z0-9_-])((?:'${JSON_SECRET_FIELD_NAME}')[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}:[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}')((?:\\\\.|[^'\\\\]){8,})(?:'|$)`,
 	'gim',
 );
 const DOUBLE_QUOTED_SECRET_FIELD_PATTERN = new RegExp(
-	`(^|[^A-Za-z0-9_-])((?:"?${SECRET_FIELD_NAME}"?)[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}[:=][ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}")((?:\\\\.|[^"\\\\]){8,${MAX_SECRET_VALUE_CHARS}})"`,
+	`(^|[^A-Za-z0-9_-])((?:"?${SECRET_FIELD_NAME}"?)[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}[:=][ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}")((?:\\\\.|[^"\\\\]){8,})(?:"|$)`,
 	'gm',
 );
 const SINGLE_QUOTED_SECRET_FIELD_PATTERN = new RegExp(
-	`(^|[^A-Za-z0-9_-])((?:'?${SECRET_FIELD_NAME}'?)[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}[:=][ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}')((?:\\\\.|[^'\\\\]){8,${MAX_SECRET_VALUE_CHARS}})'`,
+	`(^|[^A-Za-z0-9_-])((?:'?${SECRET_FIELD_NAME}'?)[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}[:=][ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}')((?:\\\\.|[^'\\\\]){8,})(?:'|$)`,
 	'gm',
 );
 const UNQUOTED_SECRET_FIELD_PATTERN = new RegExp(
-	`(^|[^A-Za-z0-9_-])((?:${SECRET_FIELD_NAME})[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}[:=][ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}})([^\\s"',;}\\]]{8,${MAX_SECRET_VALUE_CHARS}})(?=$|[\\s"',;}\\]])`,
+	`(^|[^A-Za-z0-9_-])((?:${SECRET_FIELD_NAME})[ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}}[:=][ \\t]{0,${MAX_FORMAT_WHITESPACE_CHARS}})([^\\s"',;}\\]]{8,})(?=$|[\\s"',;}\\]])`,
 	'gm',
 );
 
@@ -202,9 +180,8 @@ const SSH_CONFIG_VALUE_DIRECTIVE_PATTERN =
 const SSH_CONFIG_HOST_PATTERN = new RegExp(`^([ \\t]{0,256})(Host)([ \\t]{1,64})([^\\r\\n]{1,${MAX_SSH_LINE_CHARS}})$`, 'gim');
 const SSH_CONFIG_MATCH_PATTERN = new RegExp(`^([ \\t]{0,256})(Match)([ \\t]{1,64})([^\\r\\n]{1,${MAX_SSH_LINE_CHARS}})$`, 'gim');
 
-// Register every non-provider redaction matcher at module initialization too.
-// The conservative 17,000-char field bound includes a 16 KiB source value,
-// maximum label/spacing, and delimiters.
+// Keep matcher names centralized for diagnostics; max_match_chars below is
+// legacy metadata and is not treated as a bound.
 initialize_pattern_registry(
 	[
 		{ name: 'Private-key begin marker', pattern: PRIVATE_KEY_BEGIN_PATTERN, max_match_chars: 105 },
@@ -315,6 +292,33 @@ function redact_secret_fields(text: string): RedactionResult {
 	return { redacted: result, count };
 }
 
+function redact_kagi_candidates(text: string): RedactionResult {
+	let result = '';
+	let cursor = 0;
+	let run_start = 0;
+	let count = 0;
+	const is_token_char = (char: string | undefined) =>
+		char !== undefined && /[A-Za-z0-9_-]/.test(char);
+
+	for (let index = 0; index <= text.length; index++) {
+		if (is_token_char(text[index])) continue;
+		if (text[index] === '.' && index - run_start >= 40) {
+			let right_end = index + 1;
+			while (is_token_char(text[right_end])) right_end++;
+			if (right_end - index - 1 >= 40) {
+				if (run_start > cursor) result += text.slice(cursor, run_start);
+				result += '[REDACTED:Kagi API Key]';
+				cursor = right_end;
+				count++;
+				index = right_end - 1;
+			}
+		}
+		run_start = index + 1;
+	}
+	result += text.slice(cursor);
+	return { redacted: result, count };
+}
+
 function redact_secret_patterns(text: string): RedactionResult {
 	let result = text;
 	let count = 0;
@@ -392,6 +396,10 @@ function redact_text_chunk(
 	result = secret_redaction.redacted;
 	count += secret_redaction.count;
 
+	const kagi_redaction = redact_kagi_candidates(result);
+	result = kagi_redaction.redacted;
+	count += kagi_redaction.count;
+
 	return { redacted: result, count };
 }
 
@@ -406,7 +414,11 @@ export function redact_text(
 		};
 	}
 
-	return redact_text_chunk(text, options);
+	try {
+		return redact_text_chunk(text, options);
+	} catch {
+		return { redacted: '[REDACTED: scanning failed]', count: 1 };
+	}
 }
 
 export default async function filter_output(pi: ExtensionAPI) {

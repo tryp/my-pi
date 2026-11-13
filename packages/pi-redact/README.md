@@ -96,9 +96,7 @@ import redact from '@spences10/pi-redact';
 
 ## Limitations
 
-This extension is defensive, not a guarantee. It can miss novel secret
-formats, dynamically assembled values, and chunks that begin midway
-through a secret without prior context. It intentionally does not
+This extension is defensive, not a guarantee. Recognized credential candidates are consumed independently of length, but recognition remains heuristic and does not discover every unlabelled secret or dynamically assembled value. An unterminated quoted sensitive field is redacted through the end of the text item; an unterminated private-key block is redacted through EOF. Chunk reads that continue a recognized private-key block are redacted in full until its end marker is observed. The implementation receives complete text items and uses O(n) scanning plus O(n) output/edit storage; this is not an unlimited-memory streaming guarantee. Conservative malformed-input handling may redact more benign text than earlier bounded matching. It intentionally does not
 blanket-redact unlabelled base64, compressed, encrypted, or other
 high-entropy output because source archives, hashes, and build
 artifacts commonly have the same shape. Broad patterns can also

@@ -6,6 +6,7 @@ import {
 	REDACTION_OVERLAP_CHARS,
 	replace_owned_matches,
 } from './windowed-replace.js';
+import * as built_dist from '../dist/index.js';
 import filter_output, {
 	looks_like_ssh_config,
 	redact_ssh_config_metadata,
@@ -13,6 +14,12 @@ import filter_output, {
 } from './index.js';
 
 describe('redact_text', () => {
+	it('built distribution redacts a candidate beyond the old regex ceiling', () => {
+		const candidate = `Bearer ${'z'.repeat(50_000)}`;
+		const result = built_dist.redact_text(candidate);
+		expect(result.count).toBe(1);
+		expect(result.redacted).not.toContain(candidate);
+	});
 	it('redacts AWS access keys', () => {
 		const input = 'key: AKIA1234567890ABCDEF';
 		const { redacted, count } = redact_text(input);
@@ -83,15 +90,15 @@ describe('redact_text', () => {
 		expect(redacted).not.toContain(jwt);
 	});
 
-	it('rejects a pattern exceeding overlap during registry initialization', () => {
+	it('does not treat descriptive match length metadata as a regex safety proof', () => {
 		const test_only_pattern = {
-			name: 'test-only oversized pattern',
+			name: 'unbounded test pattern',
 			pattern: /A+/g,
 			max_match_chars: REDACTION_OVERLAP_CHARS + 1,
 		};
-		expect(() =>
-			initialize_pattern_registry([test_only_pattern], REDACTION_OVERLAP_CHARS),
-		).toThrow(/test-only oversized pattern.*exceeds configured overlap/);
+		expect(initialize_pattern_registry([test_only_pattern], REDACTION_OVERLAP_CHARS)).toEqual(
+			[test_only_pattern],
+		);
 	});
 
 	it('counts a seam-spanning credential once and a window-2 credential once', () => {
@@ -127,9 +134,9 @@ describe('redact_text', () => {
 		for (const credential of credentials) {
 			expect(redacted).not.toContain(credential);
 		}
-		expect(redacted).toContain('AAAA');
-		expect(redacted).toContain('CCCC');
-		expect(redacted).toContain('EEEE');
+		expect(redacted).not.toContain('A'.repeat(40));
+		expect(redacted).not.toContain('C'.repeat(40));
+		expect(redacted).not.toContain('E'.repeat(40));
 	});
 
 	it('keeps single-window output byte-identical to direct pattern replacement', () => {
@@ -142,17 +149,49 @@ describe('redact_text', () => {
 		expect(redact_text(input)).toEqual({ redacted: expected, count: 1 });
 	});
 
-	it('does not partially match credentials beyond their documented ceilings', () => {
-		const provider_token = `sk-${'a'.repeat(257)}`;
-		const kagi_token = `${'A'.repeat(201)}.${'B'.repeat(40)}`;
-		expect(redact_text(provider_token)).toEqual({
-			redacted: provider_token,
-			count: 0,
-		});
-		expect(redact_text(kagi_token)).toEqual({
-			redacted: kagi_token,
-			count: 0,
-		});
+	it('fully redacts provider and Kagi candidates beyond former ceilings', () => {
+		const provider_token = `sk-${'a'.repeat(20_000)}`;
+		const kagi_token = `${'A'.repeat(2_000)}.${'B'.repeat(2_000)}`;
+		for (const candidate of [provider_token, kagi_token]) {
+			const { redacted, count } = redact_text(candidate);
+			expect(count).toBe(1);
+			expect(redacted).not.toContain(candidate);
+		}
+	});
+
+	it('redacts oversized quoted fields, long PEMs, and credentials across old chunk seams', () => {
+		const password = 'P'.repeat(20_000);
+		const pem_body = 'X'.repeat(300_000);
+		const kagi = `${'K'.repeat(800)}.${'g'.repeat(900)}`;
+		const input = `password="${password}"\\n${kagi}\\n-----BEGIN PRIVATE KEY-----${pem_body}-----END PRIVATE KEY-----`;
+		const { redacted, count } = redact_text(input);
+		expect(count).toBeGreaterThanOrEqual(3);
+		for (const candidate of [password, kagi, pem_body]) {
+			expect(redacted).not.toContain(candidate);
+		}
+	});
+
+	it('redacts escaped-quote fields and long connection-string passwords', () => {
+		const field_value = `${'a'.repeat(9_000)}\\"${'b'.repeat(9_000)}`;
+		const connection_password = 'p'.repeat(20_000);
+		const input = `password="${field_value}" postgres://user:${connection_password}@localhost/db`;
+		const { redacted } = redact_text(input);
+		for (const candidate of [field_value, connection_password]) {
+			expect(redacted).not.toContain(candidate);
+		}
+	});
+
+	it('fully redacts JWT components beyond the former 8 KiB cap', () => {
+		const jwt = `eyJ${'A'.repeat(12_000)}.${'B'.repeat(12_000)}.${'C'.repeat(12_000)}`;
+		const { redacted, count } = redact_text(jwt);
+		expect(count).toBe(1);
+		expect(redacted).not.toContain(jwt);
+	});
+
+	it('consumes an unterminated quoted secret field through end of input', () => {
+		const tail = 'secret-' + 's'.repeat(20_000);
+		const { redacted } = redact_text(`password="${tail}`);
+		expect(redacted).not.toContain(tail);
 	});
 
 	it('redacts AWS temp access keys', () => {
