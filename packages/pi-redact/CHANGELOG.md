@@ -4,9 +4,12 @@
 
 ### Patch Changes
 
-- Bound variable credential spans to documented format maxima and use
-  overlapping, start-owned windows. This fixes credentials split across
-  the 256 KiB seam without double-counting or shifting replacement offsets.
+- Bound variable credential spans and use overlapping, start-owned windows.
+  The ceilings cover documented real credentials: a Kagi key is 81 chars
+  (40 + dot + 40), JWT components are limited to 8 KiB by format policy, and
+  PEM bodies to 16,384 chars. Bounding unbounded noise classes also addresses
+  the original 0.0.14 RangeError cause: `{40,}`-style quantifiers consumed
+  minified-noise runs, leading to catastrophic regex work and seam leaks.
   Inputs beyond a pattern's documented maximum are not partially matched.
 
 ## 0.0.17

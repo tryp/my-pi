@@ -9,6 +9,26 @@ interface OwnedEdit {
 	replacement: string;
 }
 
+export interface BoundedPattern {
+	name: string;
+	pattern: RegExp;
+	max_match_chars: number;
+}
+
+export function initialize_pattern_registry(
+	patterns: readonly BoundedPattern[],
+	overlap_chars: number,
+): readonly BoundedPattern[] {
+	for (const { name, max_match_chars } of patterns) {
+		if (max_match_chars > overlap_chars) {
+			throw new Error(
+				`Redaction pattern ${name} maximum length ${max_match_chars} exceeds configured overlap ${overlap_chars}`,
+			);
+		}
+	}
+	return patterns;
+}
+
 export const MAX_REDACTION_CHUNK_CHARS = 256 * 1024;
 export const MAX_JWT_COMPONENT_CHARS = 8_192;
 export const MAX_REDACTION_MATCH_CHARS =
@@ -20,6 +40,10 @@ const ANCHOR_CONTEXT_CHARS = 1;
 /**
  * Apply a global pattern in overlapping windows. A core owns matches by their
  * absolute start offset; edits are applied once, against the original text.
+ * Every start owned by a core has up to `overlap_chars` characters of lookahead
+ * inside its window slice. Thus every match at or below the configured maximum
+ * that starts in that core fits fully in the slice: no seam can split a match,
+ * so a credential cannot leak merely because it crosses a window boundary.
  */
 export function replace_owned_matches(
 	text: string,

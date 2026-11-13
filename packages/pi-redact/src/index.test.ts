@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import {
+	initialize_pattern_registry,
 	MAX_REDACTION_CHUNK_CHARS,
 	REDACTION_OVERLAP_CHARS,
 	replace_owned_matches,
@@ -80,6 +81,17 @@ describe('redact_text', () => {
 		expect(count).toBe(1);
 		expect(redacted).toContain('[REDACTED:JWT]');
 		expect(redacted).not.toContain(jwt);
+	});
+
+	it('rejects a pattern exceeding overlap during registry initialization', () => {
+		const test_only_pattern = {
+			name: 'test-only oversized pattern',
+			pattern: /A+/g,
+			max_match_chars: REDACTION_OVERLAP_CHARS + 1,
+		};
+		expect(() =>
+			initialize_pattern_registry([test_only_pattern], REDACTION_OVERLAP_CHARS),
+		).toThrow(/test-only oversized pattern.*exceeds configured overlap/);
 	});
 
 	it('counts a seam-spanning credential once and a window-2 credential once', () => {

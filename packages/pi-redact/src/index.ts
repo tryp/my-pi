@@ -8,16 +8,16 @@ import type {
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { resolve } from 'node:path';
 import {
+	initialize_pattern_registry,
 	MAX_JWT_COMPONENT_CHARS,
 	MAX_REDACTION_CHUNK_CHARS,
+	MAX_REDACTION_MATCH_CHARS,
 	REDACTION_OVERLAP_CHARS,
 	replace_owned_matches as replace_windowed_matches,
+	type BoundedPattern,
 } from './windowed-replace.js';
 
-interface SecretPattern {
-	name: string;
-	pattern: RegExp;
-}
+type SecretPattern = BoundedPattern;
 
 interface RedactionResult {
 	redacted: string;
@@ -52,73 +52,88 @@ const PRIVATE_KEY_END_PATTERN =
 // 5x headroom while preventing arbitrary log runs from becoming credentials.
 // JWT permits 8 KiB per component to cover large real claims/signatures;
 // SendGrid permits 8 KiB per component for large API-key IDs/secrets.
-const SECRET_PATTERNS: SecretPattern[] = [
-	{ name: 'AWS Access Key', pattern: /AKIA[A-Z0-9]{16}(?![A-Z0-9])/g },
-	{ name: 'AWS Temp Access Key', pattern: /ASIA[A-Z0-9]{16}(?![A-Z0-9])/g },
+const SECRET_PATTERNS = initialize_pattern_registry([
+	{ name: 'AWS Access Key', pattern: /AKIA[A-Z0-9]{16}(?![A-Z0-9])/g, max_match_chars: 20 },
+	{ name: 'AWS Temp Access Key', pattern: /ASIA[A-Z0-9]{16}(?![A-Z0-9])/g, max_match_chars: 20 },
 	{
 		name: 'AWS Secret Key',
 		pattern:
 			/\b(?:AWS_SECRET_ACCESS_KEY|aws_secret_access_key|secret_access_key|SecretAccessKey)\b[ \t]{0,64}[:=][ \t]{0,64}["']?[A-Za-z0-9/+=]{40,256}(?![A-Za-z0-9/+=])["']?/g,
+		max_match_chars: 512,
 	},
 	{
 		name: 'Bearer Token',
 		pattern: /Bearer[ \t]{1,64}[a-zA-Z0-9._-]{20,256}(?![a-zA-Z0-9._-])/g,
+		max_match_chars: 326,
 	},
 	{
 		name: 'OpenAI/Anthropic API Key',
 		pattern: /sk-[a-zA-Z0-9._-]{20,256}(?![a-zA-Z0-9._-])/g,
+		max_match_chars: 259,
 	},
 	{
 		name: 'Stripe Live Key',
 		pattern: /sk_live_[a-zA-Z0-9]{20,256}(?![a-zA-Z0-9])/g,
+		max_match_chars: 264,
 	},
 	{
 		name: 'Stripe Test Key',
 		pattern: /sk_test_[a-zA-Z0-9]{20,256}(?![a-zA-Z0-9])/g,
+		max_match_chars: 264,
 	},
 	{
 		name: 'Hetzner Token',
 		pattern:
 			/(?:HCLOUD_TOKEN|hcloud_token|token)[ \t]{0,64}[:=][ \t]{0,64}["']?[a-f0-9]{64}\b/g,
+		max_match_chars: 256,
 	},
 	{
 		name: 'Private Key',
 		pattern:
 			/-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----[\s\S]{0,16384}?(?:-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----|$)/g,
+		max_match_chars: 16_594,
 	},
 	{
 		name: 'Connection String with Password',
 		pattern: /\b[a-z][a-z0-9+.-]{0,63}:\/\/[^:\s/?#]{1,256}:[^@\s/?#]{1,4096}@/gi,
+		max_match_chars: 4_421,
 	},
 	{
 		name: 'Generic Secret Phrase',
 		pattern:
 			/\b(?:password|passwd|secret|token|api[_-]?key)\b[ \t]{1,64}(?:is|was|seen|value|header)[ \t]{1,64}["']?[A-Za-z0-9._:/+=@!-]{12,4096}(?![A-Za-z0-9._:/+=@!-])["']?/gi,
+		max_match_chars: 8_192,
 	},
 	{
 		name: 'Tavily API Key',
 		pattern: /tvly-[a-zA-Z0-9_-]{20,256}(?![a-zA-Z0-9_-])/g,
+		max_match_chars: 261,
 	},
 	{
 		name: 'Kagi API Key',
 		pattern:
 			/(?<![a-zA-Z0-9_-])[a-zA-Z0-9_-]{40,200}\.[a-zA-Z0-9_-]{40,200}(?![a-zA-Z0-9_-])/g,
+		max_match_chars: 401,
 	},
 	{
 		name: 'Brave API Key',
 		pattern: /BSA[A-Z0-9]{20,256}(?![A-Z0-9])/g,
+		max_match_chars: 259,
 	},
 	{
 		name: 'Firecrawl API Key',
 		pattern: /fc-[a-f0-9]{32}(?![a-f0-9])/g,
+		max_match_chars: 35,
 	},
 	{
 		name: 'GitHub Token',
 		pattern: /gh[pousr]_[a-zA-Z0-9]{36,256}(?![a-zA-Z0-9])/g,
+		max_match_chars: 260,
 	},
 	{
 		name: 'GitHub Fine-grained PAT',
 		pattern: /github_pat_[a-zA-Z0-9_]{20,256}(?![a-zA-Z0-9_])/g,
+		max_match_chars: 267,
 	},
 	{
 		name: 'JWT',
@@ -126,28 +141,34 @@ const SECRET_PATTERNS: SecretPattern[] = [
 			`eyJ[A-Za-z0-9_-]{8,${MAX_JWT_COMPONENT_CHARS}}\\.[A-Za-z0-9_-]{8,${MAX_JWT_COMPONENT_CHARS}}\\.[A-Za-z0-9_-]{8,${MAX_JWT_COMPONENT_CHARS}}(?![A-Za-z0-9_-])`,
 			'g',
 		),
+		max_match_chars: MAX_REDACTION_MATCH_CHARS,
 	},
 	{
 		name: 'Slack Token',
 		pattern: /xox[baprs]-[A-Za-z0-9-]{20,256}(?![A-Za-z0-9-])/g,
+		max_match_chars: 261,
 	},
 	{
 		name: 'GitLab Token',
 		pattern: /glpat-[A-Za-z0-9_-]{20,256}(?![A-Za-z0-9_-])/g,
+		max_match_chars: 262,
 	},
 	{
 		name: 'Google API Key',
 		pattern: /AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g,
+		max_match_chars: 39,
 	},
 	{
 		name: 'npm Token',
 		pattern: /npm_[A-Za-z0-9]{36,256}(?![A-Za-z0-9])/g,
+		max_match_chars: 260,
 	},
 	{
 		name: 'SendGrid API Key',
 		pattern: /SG\.[A-Za-z0-9_-]{16,8192}\.[A-Za-z0-9_-]{32,8192}(?![A-Za-z0-9_-])/g,
+		max_match_chars: 16_388,
 	},
-];
+], REDACTION_OVERLAP_CHARS);
 
 const SECRET_FIELD_NAME =
 	`(?:[A-Z0-9_]{0,${MAX_FIELD_NAME_CHARS}}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)|password|passwd|secret|token|api[_-]?key|access[_-]?token|client[_-]?secret|private[_-]?key)`;
@@ -180,6 +201,25 @@ const SSH_CONFIG_VALUE_DIRECTIVE_PATTERN =
 	new RegExp(`^([ \\t]{0,256})(HostName|User|IdentityFile|CertificateFile|ProxyJump|ProxyCommand|LocalForward|RemoteForward|DynamicForward|HostKeyAlias)([ \\t]{1,64})([^\\r\\n]{1,${MAX_SSH_LINE_CHARS}})$`, 'gim');
 const SSH_CONFIG_HOST_PATTERN = new RegExp(`^([ \\t]{0,256})(Host)([ \\t]{1,64})([^\\r\\n]{1,${MAX_SSH_LINE_CHARS}})$`, 'gim');
 const SSH_CONFIG_MATCH_PATTERN = new RegExp(`^([ \\t]{0,256})(Match)([ \\t]{1,64})([^\\r\\n]{1,${MAX_SSH_LINE_CHARS}})$`, 'gim');
+
+// Register every non-provider redaction matcher at module initialization too.
+// The conservative 17,000-char field bound includes a 16 KiB source value,
+// maximum label/spacing, and delimiters.
+initialize_pattern_registry(
+	[
+		{ name: 'Private-key begin marker', pattern: PRIVATE_KEY_BEGIN_PATTERN, max_match_chars: 105 },
+		{ name: 'Private-key end marker', pattern: PRIVATE_KEY_END_PATTERN, max_match_chars: 103 },
+		{ name: 'JSON double-quoted secret field', pattern: DOUBLE_QUOTED_JSON_SECRET_FIELD_PATTERN, max_match_chars: 17_000 },
+		{ name: 'JSON single-quoted secret field', pattern: SINGLE_QUOTED_JSON_SECRET_FIELD_PATTERN, max_match_chars: 17_000 },
+		{ name: 'Double-quoted secret field', pattern: DOUBLE_QUOTED_SECRET_FIELD_PATTERN, max_match_chars: 17_000 },
+		{ name: 'Single-quoted secret field', pattern: SINGLE_QUOTED_SECRET_FIELD_PATTERN, max_match_chars: 17_000 },
+		{ name: 'Unquoted secret field', pattern: UNQUOTED_SECRET_FIELD_PATTERN, max_match_chars: 17_000 },
+		{ name: 'SSH value directive', pattern: SSH_CONFIG_VALUE_DIRECTIVE_PATTERN, max_match_chars: 8_527 },
+		{ name: 'SSH Host directive', pattern: SSH_CONFIG_HOST_PATTERN, max_match_chars: 8_516 },
+		{ name: 'SSH Match directive', pattern: SSH_CONFIG_MATCH_PATTERN, max_match_chars: 8_517 },
+	],
+	REDACTION_OVERLAP_CHARS,
+);
 
 export function looks_like_ssh_config(text: string): boolean {
 	const has_scope_line = /^[\t\r\n ]{0,256}(?:Host|Match)\b/m.test(text);
