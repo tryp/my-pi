@@ -5,3 +5,4 @@ dist/
 .security-review/
 
 coverage/
+!packages/pi-redact/dist/
