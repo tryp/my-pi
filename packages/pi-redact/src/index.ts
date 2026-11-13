@@ -6,7 +6,6 @@ import type {
 	TextContent,
 } from '@earendil-works/pi-ai';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { resolve } from 'node:path';
 import {
 	initialize_pattern_registry,
 	MAX_REDACTION_CHUNK_CHARS,
@@ -22,7 +21,6 @@ interface RedactionResult {
 
 interface RedactionOptions {
 	force_ssh_config?: boolean;
-	force_private_key?: boolean;
 }
 
 const MAX_FIELD_NAME_CHARS = 64;
@@ -35,62 +33,28 @@ const PRIVATE_KEY_END_PATTERN =
 	/-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/;
 const PRIVATE_KEY_MARKER_PATTERN =
 	/-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----|-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/g;
-const PRIVATE_KEY_MARKER_TAIL_CHARS = 105 - 1;
 
-function get_private_key_marker_tail(text: string): string {
-	const begin = text.lastIndexOf('-----BEGIN');
-	const end = text.lastIndexOf('-----END');
-	const marker_start = Math.max(begin, end);
-	if (marker_start >= 0) {
-		const suffix = text.slice(marker_start);
-		if (
-			suffix.length <= PRIVATE_KEY_MARKER_TAIL_CHARS &&
-			/^-----(?:BEGIN|END)[ \tA-Za-z0-9_-]*$/.test(suffix)
-		) {
-			return suffix;
-		}
-	}
-	for (const marker_prefix of ['-----BEGIN', '-----END']) {
-		for (let length = marker_prefix.length - 1; length > 0; length--) {
-			const suffix = text.slice(-length);
-			if (marker_prefix.startsWith(suffix)) return suffix;
-		}
-	}
-	return '';
-}
-
-interface PrivateKeyScanState {
-	open_count: number;
-	marker_tail: string;
-	begin_crossed_chunk: boolean;
-}
-
-function scan_private_key_state(
-	text: string,
-	open_count: number,
-	marker_tail: string,
-): PrivateKeyScanState {
-	const combined = marker_tail + text;
-	const prior_chunk_length = marker_tail.length;
-	let begin_crossed_chunk = false;
+function redact_private_key_blocks(text: string): RedactionResult {
 	PRIVATE_KEY_MARKER_PATTERN.lastIndex = 0;
-	let marker: RegExpExecArray | null;
-	while ((marker = PRIVATE_KEY_MARKER_PATTERN.exec(combined)) !== null) {
-		if (marker.index + marker[0].length <= prior_chunk_length) continue;
-		const is_begin = marker[0].startsWith('-----BEGIN');
-		if (is_begin) {
-			if (marker.index < prior_chunk_length) begin_crossed_chunk = true;
-			open_count++;
-		} else if (open_count > 0) {
-			open_count--;
-		}
+	let cursor = 0;
+	let output = '';
+	let count = 0;
+	let begin: RegExpExecArray | null;
+	while ((begin = PRIVATE_KEY_MARKER_PATTERN.exec(text)) !== null) {
+		if (!begin[0].startsWith('-----BEGIN')) continue;
+		const end_match = PRIVATE_KEY_MARKER_PATTERN.exec(text);
+		const end = end_match
+			? end_match.index + end_match[0].length
+			: text.length;
+		const block = text.slice(begin.index, end);
+		output += text.slice(cursor, begin.index);
+		output += block.replace(/[^\r\n]+/g, '[REDACTED:Private Key]');
+		cursor = end;
+		count++;
+		PRIVATE_KEY_MARKER_PATTERN.lastIndex = end;
 	}
-
-	return {
-		open_count,
-		marker_tail: get_private_key_marker_tail(combined),
-		begin_crossed_chunk,
-	};
+	if (!count) return { redacted: text, count: 0 };
+	return { redacted: output + text.slice(cursor), count };
 }
 
 // Provider patterns consume their complete format-alphabet candidate. Fixed-
@@ -466,13 +430,6 @@ export function redact_text(
 	text: string,
 	options?: RedactionOptions,
 ): RedactionResult {
-	if (options?.force_private_key && text) {
-		return {
-			redacted: '[REDACTED:Private Key continuation]',
-			count: 1,
-		};
-	}
-
 	try {
 		return redact_text_chunk(text, options);
 	} catch {
@@ -480,72 +437,52 @@ export function redact_text(
 	}
 }
 
+export function process_read_text(path: string, text: string): string {
+	const pem = redact_private_key_blocks(text);
+	const redacted = redact_text(pem.redacted, {
+		force_ssh_config: is_ssh_config_path(path),
+	});
+	return redacted.redacted;
+}
+
 export default async function filter_output(pi: ExtensionAPI) {
 	let total_redacted = 0;
-	const partial_private_key_paths = new Map<
-		string,
-		{ open_count: number; marker_tail: string }
-	>();
+	const register_read_text_processor = (
+		pi as ExtensionAPI & {
+			registerReadTextProcessor?: (
+				processor: (input: {
+					path: string;
+					text: string;
+					signal?: AbortSignal;
+				}) => string | Promise<string>,
+			) => () => void;
+		}
+	).registerReadTextProcessor;
+
+	register_read_text_processor?.call(pi, ({ path, text }) => {
+		const pem = redact_private_key_blocks(text);
+		const result = redact_text(pem.redacted, {
+			force_ssh_config: is_ssh_config_path(path),
+		});
+		total_redacted += pem.count + result.count;
+		return result.redacted;
+	});
 
 	pi.on('tool_result', async (event) => {
 		if (!event.content) return;
 
 		const force_ssh_config = should_force_ssh_config_redaction(event);
-		const input_path =
-			event.toolName === 'read' &&
-			event.input &&
-			typeof event.input === 'object' &&
-			typeof (event.input as { path?: unknown }).path === 'string'
-				? (event.input as { path: string }).path
-				: undefined;
-		const normalized_input_path = input_path
-			? resolve(input_path)
-			: undefined;
-		const existing_private_key_state = normalized_input_path
-			? partial_private_key_paths.get(normalized_input_path)
-			: undefined;
-		let private_key_open_count =
-			existing_private_key_state?.open_count ?? 0;
-		let private_key_continuation = private_key_open_count > 0;
-		let private_key_marker_tail =
-			existing_private_key_state?.marker_tail ?? '';
 		let modified = false;
-
 		const new_content = event.content.map((item) => {
 			if (!is_text_content(item) || !item.text) return item;
-			const private_key_scan = scan_private_key_state(
-				item.text,
-				private_key_open_count,
-				private_key_marker_tail,
-			);
-			const { redacted, count } = redact_text(item.text, {
-				force_ssh_config,
-				force_private_key:
-					private_key_continuation ||
-					private_key_scan.begin_crossed_chunk,
-			});
-			if (count > 0) {
+			const pem = redact_private_key_blocks(item.text);
+			const result = redact_text(pem.redacted, { force_ssh_config });
+			if (pem.count + result.count > 0) {
 				modified = true;
-				total_redacted += count;
+				total_redacted += pem.count + result.count;
 			}
-
-			private_key_open_count = private_key_scan.open_count;
-			private_key_continuation = private_key_open_count > 0;
-			private_key_marker_tail = private_key_scan.marker_tail;
-
-			return { ...item, text: redacted } satisfies TextContent;
+			return { ...item, text: result.redacted } satisfies TextContent;
 		});
-
-		if (normalized_input_path) {
-			if (private_key_continuation || private_key_marker_tail) {
-				partial_private_key_paths.set(normalized_input_path, {
-					open_count: private_key_open_count,
-					marker_tail: private_key_marker_tail,
-				});
-			} else {
-				partial_private_key_paths.delete(normalized_input_path);
-			}
-		}
 
 		if (modified) return { content: new_content };
 	});

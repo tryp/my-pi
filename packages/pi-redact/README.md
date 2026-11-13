@@ -51,8 +51,8 @@ It currently detects and redacts:
   vendor-prefixed tokens
 - AWS credentials, bearer tokens, and connection strings with embedded
   credentials
-- private-key blocks and partial private-key reads; sequential `read`
-  chunks for the same path remain redacted after a private-key header
+- private-key blocks in complete native `read` inputs, including an
+  unterminated block through EOF
 - SSH config metadata such as `Host`, `HostName`, `User`,
   `IdentityFile`, `ProxyJump`, and forwarding directives
 
@@ -92,15 +92,16 @@ import redact from '@spences10/pi-redact';
 ```
 
 `my-pi` imports this package directly and enables it as the built-in
-`filter-output` extension.
+`filter-output` extension. When active with a host that supports
+`registerReadTextProcessor`, native `read` input is processed in full before
+line and byte selection, so a middle-of-file read is redacted without relying
+on previous calls. The host bounds processor input and fails closed if
+processing fails. Legacy/custom tools handled only through `tool_result` do
+not receive this whole-input-before-slice guarantee.
 
 ## Limitations
 
-This extension is defensive, not a guarantee. Recognized credential candidates are consumed independently of length, but recognition remains heuristic and does not discover every unlabelled secret or dynamically assembled value. An unterminated quoted sensitive field is redacted through the end of the text item; an unterminated private-key block is redacted through EOF. Chunk reads that continue a recognized private-key block are redacted in full until its end marker is observed. The implementation receives complete text items and uses O(n) scanning plus O(n) output/edit storage; this is not an unlimited-memory streaming guarantee. Conservative malformed-input handling may redact more benign text than earlier bounded matching. It intentionally does not
-blanket-redact unlabelled base64, compressed, encrypted, or other
-high-entropy output because source archives, hashes, and build
-artifacts commonly have the same shape. Broad patterns can also
-occasionally redact benign values.
+This extension is defensive, not a guarantee. Recognized credential candidates are consumed independently of length, but recognition remains heuristic and does not discover every unlabelled, encoded, obfuscated, or dynamically assembled secret. The native read processor receives a bounded complete text snapshot (currently limited by the host to 16 MiB) and applies all classifiers before selection; scanning/output allocation is O(n), not unlimited-memory streaming. File reads are not atomic snapshots against a hostile same-user writer: host metadata checks may detect ordinary observable changes but cannot prove stability or prevent same-size overwrite/metadata restoration, hardlink, or unusual-filesystem races. Do not treat this extension or those checks as a security boundary. Other tools and custom read backends processed through `tool_result` may provide only partial text and do not have the native-read guarantee. The extension intentionally does not blanket-redact unlabelled base64, compressed, encrypted, or other high-entropy output because source archives, hashes, and build artifacts commonly have the same shape. Broad patterns can also occasionally redact benign values.
 
 Use proper secret hygiene as the primary control:
 

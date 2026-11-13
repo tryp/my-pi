@@ -9,9 +9,75 @@ import {
 import * as built_dist from '../dist/index.js';
 import filter_output, {
 	looks_like_ssh_config,
+	process_read_text,
 	redact_ssh_config_metadata,
 	redact_text,
 } from './index.js';
+
+describe('native read whole-input processing', () => {
+	it('redacts a direct middle-of-PEM selection without cross-call state', () => {
+		const private_material = 'synthetic-private-material-DO-NOT-LEAK';
+		const source = `before\n-----BEGIN PRIVATE KEY-----\n${'x'.repeat(300_000)}${private_material}\n-----END PRIVATE KEY-----\nafter`;
+		const transformed = process_read_text('/tmp/key.txt', source);
+		const lines = transformed.split('\n');
+		const selected = lines.slice(2, 3).join('\n');
+		expect(selected).not.toContain(private_material);
+		expect(transformed).not.toContain(private_material);
+		expect(transformed.split('\n')).toHaveLength(source.split('\n').length);
+		expect(process_read_text('/tmp/key.txt', 'public replacement')).toBe('public replacement');
+	});
+
+	it('redacts unterminated private keys through EOF and applies the complete classifier set', () => {
+		const candidates: Array<[input: string, credential: string]> = [
+			['AWS_SECRET_ACCESS_KEY=' + 'A'.repeat(40), 'A'.repeat(40)],
+			['Bearer syntheticBearerToken1234567890', 'syntheticBearerToken1234567890'],
+			['sk-' + 'a'.repeat(24), 'a'.repeat(24)],
+			['ghp_' + 'a'.repeat(36), 'a'.repeat(36)],
+			['password=synthetic-password-value', 'synthetic-password-value'],
+			['postgres://user:synthetic-db-password@localhost/db', 'synthetic-db-password'],
+			['eyJ' + 'A'.repeat(30) + '.' + 'B'.repeat(30) + '.' + 'C'.repeat(30), 'A'.repeat(30) + '.' + 'B'.repeat(30) + '.' + 'C'.repeat(30)],
+			['A'.repeat(40) + '.' + 'B'.repeat(40), 'A'.repeat(40) + '.' + 'B'.repeat(40)],
+		];
+		for (const [input, credential] of candidates) {
+			const output = process_read_text('/tmp/candidates.txt', input);
+			expect(output).not.toContain(credential);
+		}
+		const input = 'Host prod\n  HostName synthetic.internal\n-----BEGIN PRIVATE KEY-----\nsynthetic-pem-tail';
+		const output = process_read_text('/home/test/.ssh/config', input);
+		expect(output).not.toContain('synthetic.internal');
+		expect(output).not.toContain('PRIVATE KEY');
+		expect(output).not.toContain('synthetic-pem-tail');
+		expect(output.split('\n')).toHaveLength(input.split('\n').length);
+	});
+
+	it('registers the per-call processor for native read', async () => {
+		let processor: ((input: { path: string; text: string }) => string) | undefined;
+		const pi = {
+			registerReadTextProcessor(callback: typeof processor) {
+				processor = callback;
+			},
+			on() {},
+			registerCommand() {},
+		};
+		await filter_output(pi as never);
+		const secret = 'native-read-secret-material';
+		const result = processor?.({
+			path: '/tmp/native-read.txt',
+			text: `-----BEGIN PRIVATE KEY-----\\n${secret}\\n-----END PRIVATE KEY-----`,
+		});
+		expect(result).toBeDefined();
+		expect(result).not.toContain(secret);
+	});
+
+	it('leaves ordinary content unchanged and keeps separate calls independent', () => {
+		const text = 'ordinary notes without secrets';
+		expect(process_read_text('/tmp/file.txt', text)).toBe(text);
+		const pem = '-----BEGIN PRIVATE KEY-----\\nsynthetic-secret\\n-----END PRIVATE KEY-----';
+		process_read_text('/tmp/a', pem);
+		expect(process_read_text('/tmp/a', 'safe')).toBe('safe');
+		expect(process_read_text('/tmp/b', 'safe')).toBe('safe');
+	});
+});
 
 describe('redact_text', () => {
 	it('built distribution redacts a candidate beyond the old regex ceiling', () => {
@@ -329,177 +395,33 @@ describe('redact_text', () => {
 		expect(redacted).toBe(input);
 	});
 
-	it('tracks and redacts private-key continuations across read chunks', async () => {
+	it('does not carry partial read state across legacy tool_result calls', async () => {
 		let tool_result_handler:
 			| ((event: Record<string, unknown>) => unknown)
 			| undefined;
 		const pi = {
-			on(
-				name: string,
-				handler: (event: Record<string, unknown>) => unknown,
-			) {
+			on(name: string, handler: (event: Record<string, unknown>) => unknown) {
 				if (name === 'tool_result') tool_result_handler = handler;
 			},
+			registerReadTextProcessor() {},
 			registerCommand() {},
 		};
 		await filter_output(pi as never);
-		const path = '/tmp/chunked-private-key.pem';
-		const first_chunk = [
-			'-----BEGIN PRIVATE KEY-----',
-			'Q0FOQVJZX0ZJUlNUX0NIVU5LX1BSSVZBVEVfS0VZ',
-		].join('\n');
-		const second_chunk = [
-			'Q0FOQVJZX1NFQ09ORF9DSFVOS19QUklWQVRFX0tFWQ==',
-			'-----END PRIVATE KEY-----',
-		].join('\n');
-
-		await tool_result_handler?.({
+		const complete = (await tool_result_handler?.({
 			toolName: 'read',
-			input: { path },
-			content: [{ type: 'text', text: first_chunk }],
+			input: { path: '/tmp/chunked-private-key.pem' },
+			content: [{
+				type: 'text',
+				text: '-----BEGIN PRIVATE KEY-----\\nsynthetic-key-material\\n-----END PRIVATE KEY-----',
+			}],
+		})) as { content?: Array<{ text?: string }> };
+		expect(complete.content?.[0]?.text).not.toContain('synthetic-key-material');
+		const partial = await tool_result_handler?.({
+			toolName: 'read',
+			input: { path: '/tmp/chunked-private-key.pem', offset: 2 },
+			content: [{ type: 'text', text: 'unlabelled-key-continuation-material' }],
 		});
-		const result = (await tool_result_handler?.({
-			toolName: 'read',
-			input: { path, offset: 2 },
-			content: [{ type: 'text', text: second_chunk }],
-		})) as { content?: Array<{ text?: string }> };
-
-		expect(result.content?.[0]?.text).toContain(
-			'[REDACTED:Private Key continuation]',
-		);
-		expect(result.content?.[0]?.text).not.toContain(
-			'Q0FOQVJZX1NFQ09ORF9DSFVOS19QUklWQVRFX0tFWQ==',
-		);
-	});
-
-	it('tracks ordered and split private-key markers across sequential reads in source and built output', async () => {
-		for (const extension of [filter_output, built_dist.default]) {
-			let handler:
-				| ((event: Record<string, unknown>) => unknown)
-				| undefined;
-			const pi = {
-				on(name: string, callback: (event: Record<string, unknown>) => unknown) {
-					if (name === 'tool_result') handler = callback;
-				},
-				registerCommand() {},
-			};
-			await extension(pi as never);
-
-			const ordered_path = `/tmp/ordered-private-key-${Math.random()}.pem`;
-			await handler?.({
-				toolName: 'read',
-				input: { path: ordered_path },
-				content: [{
-					type: 'text',
-					text: `-----END PRIVATE KEY-----\nclosed block\n-----BEGIN PRIVATE KEY-----`,
-				}],
-			});
-			const ordered_result = (await handler?.({
-				toolName: 'read',
-				input: { path: ordered_path, offset: 2 },
-				content: [{ type: 'text', text: 'ORDERED_KEY_MATERIAL_MUST_NOT_LEAK' }],
-			})) as { content?: Array<{ text?: string }> };
-			expect(ordered_result.content?.[0]?.text).not.toContain(
-				'ORDERED_KEY_MATERIAL_MUST_NOT_LEAK',
-			);
-
-			const split_path = `/tmp/split-marker-private-key-${Math.random()}.pem`;
-			await handler?.({
-				toolName: 'read',
-				input: { path: split_path },
-				content: [{ type: 'text', text: '-----BEG' }],
-			});
-			const split_begin = (await handler?.({
-				toolName: 'read',
-				input: { path: split_path, offset: 1 },
-				content: [{ type: 'text', text: `IN PRIVATE KEY-----\nSPLIT_BEGIN_KEY_MATERIAL` }],
-			})) as { content?: Array<{ text?: string }> };
-			expect(split_begin.content?.[0]?.text).not.toContain(
-				'SPLIT_BEGIN_KEY_MATERIAL',
-			);
-
-			await handler?.({
-				toolName: 'read',
-				input: { path: split_path, offset: 2 },
-				content: [{ type: 'text', text: 'SPLIT_END_KEY_MATERIAL-----END PRI' }],
-			});
-			await handler?.({
-				toolName: 'read',
-				input: { path: split_path, offset: 3 },
-				content: [{ type: 'text', text: 'VATE KEY-----' }],
-			});
-			const after_end = await handler?.({
-				toolName: 'read',
-				input: { path: split_path, offset: 4 },
-				content: [{ type: 'text', text: 'ordinary public text' }],
-			});
-			expect(after_end).toBeUndefined();
-		}
-	});
-
-	it('redacts private-key continuations split across text content blocks', async () => {
-		let tool_result_handler:
-			| ((event: Record<string, unknown>) => unknown)
-			| undefined;
-		const pi = {
-			on(
-				name: string,
-				handler: (event: Record<string, unknown>) => unknown,
-			) {
-				if (name === 'tool_result') tool_result_handler = handler;
-			},
-			registerCommand() {},
-		};
-		await filter_output(pi as never);
-		const continuation = 'Q0FOQVJZX1BSSVZBVEVfQk9EWV9DT05URU5U';
-		const result = (await tool_result_handler?.({
-			toolName: 'read',
-			input: { path: '/tmp/split-content-key.pem' },
-			content: [
-				{ type: 'text', text: `-----${'BEGIN PRIVATE KEY-----'}\n` },
-				{ type: 'text', text: continuation },
-			],
-		})) as { content?: Array<{ text?: string }> };
-
-		expect(result.content?.[1]?.text).toContain(
-			'[REDACTED:Private Key continuation]',
-		);
-		expect(result.content?.[1]?.text).not.toContain(continuation);
-	});
-
-	it('normalizes read paths before tracking private-key continuations', async () => {
-		let tool_result_handler:
-			| ((event: Record<string, unknown>) => unknown)
-			| undefined;
-		const pi = {
-			on(
-				name: string,
-				handler: (event: Record<string, unknown>) => unknown,
-			) {
-				if (name === 'tool_result') tool_result_handler = handler;
-			},
-			registerCommand() {},
-		};
-		await filter_output(pi as never);
-		const continuation =
-			'Q0FOQVJZX1NFQ09ORF9DSFVOS19QUklWQVRFX0tFWQ==';
-		await tool_result_handler?.({
-			toolName: 'read',
-			input: { path: '/tmp/equivalent-key.pem' },
-			content: [
-				{ type: 'text', text: `-----${'BEGIN PRIVATE KEY-----'}\n` },
-			],
-		});
-		const result = (await tool_result_handler?.({
-			toolName: 'read',
-			input: { path: '/tmp/./equivalent-key.pem', offset: 2 },
-			content: [{ type: 'text', text: continuation }],
-		})) as { content?: Array<{ text?: string }> };
-
-		expect(result.content?.[0]?.text).toContain(
-			'[REDACTED:Private Key continuation]',
-		);
-		expect(result.content?.[0]?.text).not.toContain(continuation);
+		expect(partial).toBeUndefined();
 	});
 
 	it('redacts GitHub fine-grained PATs', () => {
