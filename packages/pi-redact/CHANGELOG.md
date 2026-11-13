@@ -1,6 +1,6 @@
 # @spences10/pi-redact
 
-## 0.0.15
+## 0.0.17
 
 ### Patch Changes
 
