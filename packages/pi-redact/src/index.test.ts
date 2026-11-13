@@ -27,6 +27,46 @@ describe('native read whole-input processing', () => {
 		expect(process_read_text('/tmp/key.txt', 'public replacement')).toBe('public replacement');
 	});
 
+	it('built distribution conservatively redacts nested, mismatched, and unterminated key markers', () => {
+		const nested_secret = 'synthetic-nested-key-material';
+		const nested = [
+			'before',
+			'-----BEGIN PRIVATE KEY-----',
+			'-----BEGIN PRIVATE KEY-----',
+			nested_secret,
+			'-----END PRIVATE KEY-----',
+			'-----END PRIVATE KEY-----',
+			' after',
+		].join('\n');
+		const nested_result = built_dist.process_read_text('/tmp/key.pem', nested);
+		expect(nested_result).not.toContain(nested_secret);
+		expect(nested_result).toContain('before');
+		expect(nested_result).toContain('after');
+
+		const mismatch_secret = 'synthetic-mismatched-key-material';
+		const mismatch = [
+			'public',
+			'-----BEGIN RSA PRIVATE KEY-----',
+			mismatch_secret,
+			'-----END DSA PRIVATE KEY-----',
+			mismatch_secret,
+		].join('\n');
+		const mismatch_result = built_dist.process_read_text('/tmp/key.pem', mismatch);
+		expect(mismatch_result).not.toContain(mismatch_secret);
+		expect(mismatch_result).not.toContain('END DSA PRIVATE KEY');
+		expect(mismatch_result).toContain('public');
+
+		const unterminated_secret = 'synthetic-unterminated-key-material';
+		const unterminated = [
+			'prefix',
+			'-----BEGIN PRIVATE KEY-----',
+			unterminated_secret,
+		].join('\n');
+		const unterminated_result = built_dist.process_read_text('/tmp/key.pem', unterminated);
+		expect(unterminated_result).not.toContain(unterminated_secret);
+		expect(unterminated_result).toContain('prefix');
+	});
+
 	it('redacts unterminated private keys through EOF and applies the complete classifier set', () => {
 		const candidates: Array<[input: string, credential: string]> = [
 			['AWS_SECRET_ACCESS_KEY=' + 'A'.repeat(40), 'A'.repeat(40)],
@@ -393,6 +433,30 @@ describe('redact_text', () => {
 		const { redacted, count } = redact_text(input);
 		expect(count).toBe(0);
 		expect(redacted).toBe(input);
+	});
+
+	it('fails closed for native reads when the host lacks whole-input processing', async () => {
+		let tool_result_handler:
+			| ((event: Record<string, unknown>) => unknown)
+			| undefined;
+		const pi = {
+			on(name: string, handler: (event: Record<string, unknown>) => unknown) {
+					if (name === 'tool_result') tool_result_handler = handler;
+			},
+			registerCommand() {},
+		};
+		await filter_output(pi as never);
+		const result = (await tool_result_handler?.({
+			toolName: 'read',
+			input: { path: '/tmp/chunked-private-key.pem', offset: 2 },
+			content: [{ type: 'text', text: 'synthetic-private-key-continuation' }],
+		})) as { content?: Array<{ text?: string }> };
+		expect(result.content?.[0]?.text).toContain(
+			'requires full-input redaction support',
+		);
+		expect(result.content?.[0]?.text).not.toContain(
+			'synthetic-private-key-continuation',
+		);
 	});
 
 	it('does not carry partial read state across legacy tool_result calls', async () => {

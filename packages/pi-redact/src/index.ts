@@ -32,20 +32,36 @@ const PRIVATE_KEY_BEGIN_PATTERN =
 const PRIVATE_KEY_END_PATTERN =
 	/-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/;
 const PRIVATE_KEY_MARKER_PATTERN =
-	/-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----|-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/g;
+	/-----BEGIN[ \t]{1,8}([\w -]{0,64}PRIVATE[ \t]{1,8}KEY)-----|-----END[ \t]{1,8}([\w -]{0,64}PRIVATE[ \t]{1,8}KEY)-----/g;
 
 function redact_private_key_blocks(text: string): RedactionResult {
 	PRIVATE_KEY_MARKER_PATTERN.lastIndex = 0;
 	let cursor = 0;
 	let output = '';
 	let count = 0;
-	let begin: RegExpExecArray | null;
-	while ((begin = PRIVATE_KEY_MARKER_PATTERN.exec(text)) !== null) {
-		if (!begin[0].startsWith('-----BEGIN')) continue;
-		const end_match = PRIVATE_KEY_MARKER_PATTERN.exec(text);
-		const end = end_match
-			? end_match.index + end_match[0].length
-			: text.length;
+	let marker: RegExpExecArray | null;
+	while ((marker = PRIVATE_KEY_MARKER_PATTERN.exec(text)) !== null) {
+		if (!marker[1]) continue;
+		const begin = marker;
+		const labels = [normalize_private_key_label(marker[1])];
+		let end = text.length;
+		let malformed = false;
+		while ((marker = PRIVATE_KEY_MARKER_PATTERN.exec(text)) !== null) {
+			if (marker[1]) {
+				labels.push(normalize_private_key_label(marker[1]));
+				continue;
+			}
+			if (normalize_private_key_label(marker[2]) !== labels.at(-1)) {
+				malformed = true;
+				break;
+			}
+			labels.pop();
+			if (!labels.length) {
+				end = marker.index + marker[0].length;
+				break;
+			}
+		}
+		if (malformed) end = text.length;
 		const block = text.slice(begin.index, end);
 		output += text.slice(cursor, begin.index);
 		output += block.replace(/[^\r\n]+/g, '[REDACTED:Private Key]');
@@ -55,6 +71,10 @@ function redact_private_key_blocks(text: string): RedactionResult {
 	}
 	if (!count) return { redacted: text, count: 0 };
 	return { redacted: output + text.slice(cursor), count };
+}
+
+function normalize_private_key_label(label: string): string {
+	return label.replace(/[ \t]+/g, ' ').trim().toUpperCase();
 }
 
 // Provider patterns consume their complete format-alphabet candidate. Fixed-
@@ -470,6 +490,15 @@ export default async function filter_output(pi: ExtensionAPI) {
 
 	pi.on('tool_result', async (event) => {
 		if (!event.content) return;
+		if (event.toolName === 'read' && typeof register_read_text_processor !== 'function') {
+			total_redacted++;
+			return {
+				content: [{
+					type: 'text',
+					text: '[REDACTED: native read requires full-input redaction support]',
+				}],
+			};
+		}
 
 		const force_ssh_config = should_force_ssh_config_redaction(event);
 		let modified = false;

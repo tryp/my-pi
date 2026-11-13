@@ -6,20 +6,37 @@ const MAX_FORMAT_WHITESPACE_CHARS = 64;
 const MAX_SSH_LINE_CHARS = 8_192;
 const PRIVATE_KEY_BEGIN_PATTERN = /-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/;
 const PRIVATE_KEY_END_PATTERN = /-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/;
-const PRIVATE_KEY_MARKER_PATTERN = /-----BEGIN[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----|-----END[ \t]{1,8}[\w -]{0,64}PRIVATE[ \t]{1,8}KEY-----/g;
+const PRIVATE_KEY_MARKER_PATTERN = /-----BEGIN[ \t]{1,8}([\w -]{0,64}PRIVATE[ \t]{1,8}KEY)-----|-----END[ \t]{1,8}([\w -]{0,64}PRIVATE[ \t]{1,8}KEY)-----/g;
 function redact_private_key_blocks(text) {
     PRIVATE_KEY_MARKER_PATTERN.lastIndex = 0;
     let cursor = 0;
     let output = '';
     let count = 0;
-    let begin;
-    while ((begin = PRIVATE_KEY_MARKER_PATTERN.exec(text)) !== null) {
-        if (!begin[0].startsWith('-----BEGIN'))
+    let marker;
+    while ((marker = PRIVATE_KEY_MARKER_PATTERN.exec(text)) !== null) {
+        if (!marker[1])
             continue;
-        const end_match = PRIVATE_KEY_MARKER_PATTERN.exec(text);
-        const end = end_match
-            ? end_match.index + end_match[0].length
-            : text.length;
+        const begin = marker;
+        const labels = [normalize_private_key_label(marker[1])];
+        let end = text.length;
+        let malformed = false;
+        while ((marker = PRIVATE_KEY_MARKER_PATTERN.exec(text)) !== null) {
+            if (marker[1]) {
+                labels.push(normalize_private_key_label(marker[1]));
+                continue;
+            }
+            if (normalize_private_key_label(marker[2]) !== labels.at(-1)) {
+                malformed = true;
+                break;
+            }
+            labels.pop();
+            if (!labels.length) {
+                end = marker.index + marker[0].length;
+                break;
+            }
+        }
+        if (malformed)
+            end = text.length;
         const block = text.slice(begin.index, end);
         output += text.slice(cursor, begin.index);
         output += block.replace(/[^\r\n]+/g, '[REDACTED:Private Key]');
@@ -30,6 +47,9 @@ function redact_private_key_blocks(text) {
     if (!count)
         return { redacted: text, count: 0 };
     return { redacted: output + text.slice(cursor), count };
+}
+function normalize_private_key_label(label) {
+    return label.replace(/[ \t]+/g, ' ').trim().toUpperCase();
 }
 // Provider patterns consume their complete format-alphabet candidate. Fixed-
 // width provider formats retain exact widths; minimum lengths remain heuristics.
@@ -335,6 +355,15 @@ export default async function filter_output(pi) {
     pi.on('tool_result', async (event) => {
         if (!event.content)
             return;
+        if (event.toolName === 'read' && typeof register_read_text_processor !== 'function') {
+            total_redacted++;
+            return {
+                content: [{
+                        type: 'text',
+                        text: '[REDACTED: native read requires full-input redaction support]',
+                    }],
+            };
+        }
         const force_ssh_config = should_force_ssh_config_redaction(event);
         let modified = false;
         const new_content = event.content.map((item) => {

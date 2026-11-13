@@ -96,8 +96,10 @@ import redact from '@spences10/pi-redact';
 `registerReadTextProcessor`, native `read` input is processed in full before
 line and byte selection, so a middle-of-file read is redacted without relying
 on previous calls. The host bounds processor input and fails closed if
-processing fails. Legacy/custom tools handled only through `tool_result` do
-not receive this whole-input-before-slice guarantee.
+processing fails. On older hosts without `registerReadTextProcessor`, native
+`read` results fail closed rather than returning potentially partial plaintext.
+Legacy/custom tools handled only through `tool_result` do not receive this
+whole-input-before-slice guarantee.
 
 ## Limitations
 
