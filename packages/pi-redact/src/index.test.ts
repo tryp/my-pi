@@ -126,6 +126,12 @@ describe('redact_text', () => {
 		expect(result.count).toBe(1);
 		expect(result.redacted).not.toContain(candidate);
 	});
+	it('conservatively redacts long benign dotted candidates without asserting provider validity', () => {
+		const candidate = `sk-${'benign.'.repeat(500)}`;
+		const result = built_dist.redact_text(candidate);
+		expect(result.count).toBe(1);
+		expect(result.redacted).not.toContain(candidate);
+	});
 	it('redacts AWS access keys', () => {
 		const input = 'key: AKIA1234567890ABCDEF';
 		const { redacted, count } = redact_text(input);

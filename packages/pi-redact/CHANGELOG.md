@@ -1,5 +1,17 @@
 # @spences10/pi-redact
 
+## 0.0.19
+
+### Patch Changes
+
+- Scan credential candidates across the complete input without truncating
+  unbounded provider-format spans. Native `read` processing now redacts the
+  whole input before the host selects lines or bytes, including PEM bodies
+  that cross selection boundaries. Malformed, mismatched, nested, or
+  unterminated private-key markers are handled conservatively through the
+  end of the affected block (or input), favoring redaction over preserving
+  uncertain plaintext.
+
 ## 0.0.18
 
 ### Patch Changes
